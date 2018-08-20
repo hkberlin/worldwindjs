@@ -220,6 +220,8 @@ define([
 
             program.loadLightDirection(gl, this._activeLightDirection);
 
+            program.loadOpacity(gl, this.opacity);
+            
             program.setScale(gl);
 
             // Use this layer's night image when the layer has time value defined
