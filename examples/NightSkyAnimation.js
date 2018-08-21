@@ -82,4 +82,24 @@ requirejs([
 
         // Create a layer manager for controlling layer visibility.
         var layerManager = new LayerManager(wwd);
+        
+        // Set the initial opacity of the night image to be slightly transparent
+        atmosphereLayer.opacity = 0.7;
+        
+        // Add a slider to control the night image opacity
+        $( document ).ready( function() {
+            var opacitySlider = $("#opacitySlider");
+            opacitySlider.slider({
+                value: 0.7,
+                min: 0,
+                max: 1,
+                step: 0.1,
+                animate: true,
+                slide: function (event, ui) {
+                    $("#opacity").html(ui.value);
+                    atmosphereLayer.opacity = ui.value;
+                }
+            });
+            opacitySlider.slider('value', atmosphereLayer.opacity);        
+        });
     });
