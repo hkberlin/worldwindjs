@@ -59,6 +59,10 @@ define([
             this.pickEnabled = true;
 
             this.detectBlankImages = true;
+            
+            // Set the detail control so the resolution is a close match 
+            // to the resolution on the Bing maps website
+            this.detailControl = 1.25;
         };
 
         // Internal use only. Intentionally not documented.
