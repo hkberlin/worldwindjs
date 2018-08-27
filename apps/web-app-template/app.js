@@ -363,14 +363,14 @@ $(document).ready(function () {
         var self = this;
         // An array of marker images
         self.markerPalette = [
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-red.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-green.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-blue.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-orange.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-teal.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-purple.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-white.png",
-            "https://files.worldwind.arc.nasa.gov/artifactory/web/0.9.0/images/pushpins/castshadow-black.png"
+            "/build/dist/images/pushpins/castshadow-red.png",
+            "/build/dist/images/pushpins/castshadow-green.png",
+            "/build/dist/images/pushpins/castshadow-blue.png",
+            "/build/dist/images/pushpins/castshadow-orange.png",
+            "/build/dist/images/pushpins/castshadow-teal.png",
+            "/build/dist/images/pushpins/castshadow-purple.png",
+            "/build/dist/images/pushpins/castshadow-white.png",
+            "/build/dist/images/pushpins/castshadow-black.png"
         ];
         // The currently selected marker icon 
         self.selectedMarkerImage = ko.observable(self.markerPalette[0]);
@@ -641,18 +641,17 @@ $(document).ready(function () {
     globe.addLayer(new WorldWind.BingAerialWithLabelsLayer(), {
         category: "base",
         enabled: false,
-        detailControl: 1.5
-    });
-    globe.addLayerFromWms("https://tiles.maps.eox.at/wms", "osm", {
-        category: "base",
-        enabled: false
     });
     globe.addLayer(new WorldWind.BingRoadsLayer(), {
         category: "overlay",
         enabled: false,
-        detailControl: 1.5,
         opacity: 0.80
     });
+    globe.addLayer(new WorldWind.OpenStreetMapImageLayer(), {
+        category: "base",
+        enabled: false,
+        opacity: 0.80
+    });    
     globe.addLayerFromWms("https://tiles.maps.eox.at/wms", "overlay", {
         category: "overlay",
         displayName: "OpenStreetMap overlay by EOX",
@@ -688,22 +687,7 @@ $(document).ready(function () {
         category: "debug",
         enabled: false
     });
-    
-    
-    // Copied from examples
-    var kmlFilePromise = new WorldWind.KmlFile('data/gen.kml');
-    kmlFilePromise.then(function (kmlFile) {
-        var renderableLayer = new WorldWind.RenderableLayer("KML");
-        renderableLayer.addRenderable(kmlFile);
-        
-        globe.addLayer(renderableLayer, {
-          category: "overlay",
-          enabled: true
-        });
-        
-    });    
-    
-    
+     
     // Activate the Knockout bindings between our view models and the html
     let layers = new LayersViewModel(globe);
     let settings = new SettingsViewModel(globe);
