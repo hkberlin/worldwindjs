@@ -8,7 +8,7 @@ and features from the WebWorldWind's develop branch plus several enhancements fr
 
 Enhancements include:
 
-- A template for creating a geo-browser with Bootstrap and Knockout.
+- A template for creating geo-browser web apps with Bootstrap and Knockout.
 - Keyboard navigation controls for the globe
 - Improved the resolution of Bing imagery
 - Support for a translucent night-image
