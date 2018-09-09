@@ -7,6 +7,8 @@ __WorldWindJS__ is a fork of the popular [Web WorldWind](https://github.com/NASA
 library from NASA and ESA. This fork provides a release channel for builds based on the latest fixes
 and features from WebWorldWind's develop branch plus several enhancements from the WorldWind community.
 
+Show your support for this project by giving it a [star](https://github.com/emxsys/worldwindjs/stargazers)!
+
 ### Enhancements include:
 
 - A template for creating geo-browser web apps with Bootstrap and Knockout (apps/worldwind-app-template).
@@ -18,7 +20,8 @@ and features from WebWorldWind's develop branch plus several enhancements from t
 ### Migrating from NASA WebWorldWind
 
 - The WorldWindJS npm package is available in the [npm repository](https://www.npmjs.com/package/worldwindjs).
-- The project supports npm dependencies on its git repository: See [npm dependencies](https://github.com/emxsys/worldwindjs/wiki/npm-dependencies)is in the wiki. 
+- WorldWindJS is available on the __unpkg__ and __jsDelivr__ CDNs. See [CDN providers](https://github.com/emxsys/worldwindjs/wiki/CDN-providers) in the wiki for examples.
+- The project supports npm dependencies on its git repository: See [npm dependencies](https://github.com/emxsys/worldwindjs/wiki/npm-dependencies) in the wiki for examples. 
 - The JS libraries (production and debug) and the image resources are available in the [GitHub releases](https://github.com/emxsys/worldwindjs/releases/latest).
 
 

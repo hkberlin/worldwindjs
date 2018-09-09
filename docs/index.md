@@ -1,19 +1,24 @@
 # Overview
 
-__WorldWindJS__ is a fork of the popular [Web WorldWind](https://github.com/NASAWorldWind/WebWorldWind)
+[__WorldWindJS__](https://github.com/emxsys/worldwindjs) is a fork of the popular [Web WorldWind](https://github.com/NASAWorldWind/WebWorldWind)
 library from NASA and ESA. This fork provides a release channel for builds based on the latest fixes
 and features from the WebWorldWind develop branch integrated with several enhancements from the 
 WorldWind community. 
 
-WorldWindJS releases can be downloaded from the [GitHub](https://github.com/emxsys/worldwindjs/releases) 
+WorldWindJS releases can be downloaded from [GitHub](https://github.com/emxsys/worldwindjs/releases) 
 or from [npm](https://www.npmjs.com/package/worldwindjs).  Of course, you can fork or clone this
 project and build the library yourself using the instructions in the [README](https://github.com/emxsys/worldwindjs/blob/master/README.md).
+
+## Examples
+
+- [WorldWind Explorer](https://worldwind.earth/explorer) - A feature rich geo-browser built with Bootstrap and KnockoutJS.
+- [WorldWind React Demo](https://emxsys.github.io/worldwind-react-app) - An example geo-browser built with React.
 
 ## Quick Start
 
 Do you want to start developing right away? 
 
-- Browse the source code for a [web-app-template](https://github.com/emxsys/worldwindjs/tree/master/apps/web-app-template)
+- Browse the source code for the [web-app-template](https://github.com/emxsys/worldwindjs/tree/develop/apps/web-app-template)
 - View/edit a completed app in [JSFiddle](https://jsfiddle.net/emxsys/e0a2z1km/)
 
 Are you interested in building a WorldWindJS geo-browser or embedding a globe in a web page using [React](https://reactjs.org)? 

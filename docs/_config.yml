@@ -3,8 +3,8 @@ title: WorldWindJS
 description: Build geo-browser web apps with WorldWindJS.
 show_downloads: true
 github:
-  zip_url: https://github.com/emxsys/worldwindjs/archive/v1.5.90.zip
-  tar_url: https://github.com/emxsys/worldwindjs/archive/v1.5.90.tar.gz
+  zip_url: https://github.com/emxsys/worldwindjs/archive/v1.6.90.zip
+  tar_url: https://github.com/emxsys/worldwindjs/archive/v1.6.90.tar.gz
 plugins:
    - jekyll-mentions
    - jemoji
