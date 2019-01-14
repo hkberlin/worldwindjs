@@ -13,6 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *  
+ * NOTICE: This file was modified from the original NASAWorldWind/WebWorldWind distribution.
+ * NOTICE: This file contains changes made by Bruce Schubert (bruce@emxsys.com)
  */
 define([
         '../shapes/AnnotationAttributes',
@@ -265,11 +268,13 @@ define([
             var w, h, s, iLeft, iRight, iTop, iBottom,
                 offset, leaderGapHeight;
 
-            // Wraps the text based and the width and height that were set for the
-            // annotation
-            this.label = dc.textRenderer.wrap(
-                this.label,
-                this.attributes.width, this.attributes.height);
+            // Conditionally wraps the text to the width defined in the attributes.
+            // Also conditionally truncates the wrapped text to the height, if defined. 
+            if (this.attributes.width > 0) {
+                this.label = dc.textRenderer.wrap(
+                    this.label,
+                    this.attributes.width, this.attributes.height);
+            }
 
             // Compute the annotation's model point.
             dc.surfacePointForMode(this.position.latitude, this.position.longitude, this.position.altitude,

@@ -771,7 +771,7 @@ define([
             },
 
             epsg3857ToEpsg4326: function (easting, northing) {
-                var r = 6.3781e6,
+                var r = 6.378137e6,
                     latRadians = (Math.PI / 2) - 2 * Math.atan(Math.exp(-northing / r)),
                     lonRadians = easting / r;
 
