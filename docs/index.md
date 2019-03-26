@@ -1,5 +1,3 @@
-**Important News**
-
 ___Mitigation efforts are underway to ensure that WorldWindJS based projects are insulated from the effects of the NASA WorldWind project suspension.___
 
 # Overview
