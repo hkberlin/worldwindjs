@@ -3,8 +3,10 @@
 # WorldWindJS
 [![NPM](https://img.shields.io/npm/v/worldwindjs.svg)](https://www.npmjs.com/package/worldwindjs) 
 
+## Important News
+***Mitigation efforts are underway to ensure that WorldWindJS based projects are insulated from the effects of the NASA WorldWind project suspension.***
+
 ## A community supported and enhanced Web WorldWind library
-___Note: This is personal project and is not the official Web WorldWind library from NASA___
 
 __WorldWindJS__ is a fork of the popular [Web WorldWind](https://github.com/NASAWorldWind/WebWorldWind)
 library from NASA (with contributions from ESA). This fork provides a release channel for builds based on the latest fixes
