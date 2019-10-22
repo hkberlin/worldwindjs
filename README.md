@@ -16,9 +16,9 @@ This fork exists to support the development of several personal projects, includ
 - [Explorer](https://worldwind.earth/explorer) - the WorldWind Explorer
 - [WMT v2.0](https://worldwind.earth/wildfire) -  Wildfire Management Tool v2.0 (_under development_)
 - [Bible Atlas](https://viewer.earth/bible-atlas) - Geography and cartography of the Holy Land (_under development_)
-- [worldwind-react-globe](https://emxsys.github.io/worldwind-react-globe/) - A React component for Web WorldWind
-- [worldwind-react-globe-bs4](https://emxsys.github.io/worldwind-react-globe-bs4/) - React Bootstrap4 UI components for Web WorldWind
-- [worldwind-react-app](https://emxsys.github.io/worldwind-react-app/) - A geo-browser web app using Web WorldWind with React and Bootstrap 4 
+- [worldwind-react-globe](https://worldwind.earth/worldwind-react-globe/) - A React component for Web WorldWind
+- [worldwind-react-globe-bs4](https://worldwind.earth/worldwind-react-globe-bs4/) - React Bootstrap4 UI components for Web WorldWind
+- [worldwind-react-app](https://worldwind.earth/worldwind-react-app/) - A geo-browser web app using Web WorldWind with React and Bootstrap 4 
 
 WorldWindJS is made available in the spirit of the NASA motto: _For the benefit of all._  Show your support for this project by giving it a [star](https://github.com/worldwindearth/worldwindjs/stargazers)!
 
@@ -53,7 +53,7 @@ WorldWindJS is made available in the spirit of the NASA motto: _For the benefit 
 
 #### Demos
 - [__worldwind-web-app__ demo](https://worldwindearth.github.io/worldwind-web-app/): A geo-browser built with Bootstrap and KnockoutJS.
-- [__worldwind-react-app__ demo](https://emxsys.github.io/worldwind-react-app/): A geo-browser built with React using the [worldwind-react-globe](https://github.com/emxsys/worldwind-react-globe) and [worldwind-react-globe-bs4](https://github.com/emxsys/worldwind-react-globe-bs4) components.
+- [__worldwind-react-app__ demo](https://worldwind.earth/worldwind-react-app/): A geo-browser built with React using the [worldwind-react-globe](https://github.com/emxsys/worldwind-react-globe) and [worldwind-react-globe-bs4](https://github.com/emxsys/worldwind-react-globe-bs4) components.
 
 #### Related projects
 - __[worldwind-react-globe](https://github.com/emxsys/worldwind-react-globe)__: A React-based Globe component that encapulates WorldWindJS.
