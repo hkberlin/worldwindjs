@@ -5454,23 +5454,17 @@ define('util/WWMath',[
              * Matrix.setToPerspectiveProjection. The given distance should specify the smallest distance between the
              * eye and the object being viewed, but may be an approximation if an exact distance is not required.
              *
-             * @param {Number} viewportWidth The viewport width, in screen coordinates.
-             * @param {Number} viewportHeight The viewport height, in screen coordinates.
+             * @param {Number} fovyDegrees The camera vertical field of view.
              * @param {Number} distanceToSurface The distance from the perspective eye point to the nearest object, in
              * meters.
              * @returns {Number} The maximum near clip distance, in meters.
              * @throws {ArgumentError} If the specified width or height is less than or equal to zero, or if the
              * specified distance is negative.
              */
-            perspectiveNearDistance: function (viewportWidth, viewportHeight, distanceToSurface) {
-                if (viewportWidth <= 0) {
+            perspectiveNearDistance: function (fovyDegrees, distanceToSurface) {
+                if (fovyDegrees <= 0 || fovyDegrees >= 180) {
                     throw new ArgumentError(Logger.logMessage(Logger.LEVEL_SEVERE, "WWMath", "perspectiveNearDistance",
-                        "invalidWidth"));
-                }
-
-                if (viewportHeight <= 0) {
-                    throw new ArgumentError(Logger.logMessage(Logger.LEVEL_SEVERE, "WWMath", "perspectiveNearDistance",
-                        "invalidHeight"));
+                        "invalidFieldOfView"));
                 }
 
                 if (distanceToSurface < 0) {
@@ -5478,29 +5472,8 @@ define('util/WWMath',[
                         "The specified distance is negative."));
                 }
 
-                // Compute the maximum near clip distance that avoids clipping an object at the specified distance from
-                // the eye. Since the furthest points on the near clip rectangle are the four corners, we compute a near
-                // distance that puts any one of these corners exactly at the given distance. The distance to one of the
-                // four corners can be expressed in terms of the near clip distance, given distance to a corner 'd',
-                // near distance 'n', and aspect ratio 'a':
-                //
-                // d*d = x*x + y*y + z*z
-                // d*d = (n*n/4 * a*a) + (n*n/4) + (n*n)
-                //
-                // Extracting 'n*n/4' from the right hand side gives:
-                //
-                // d*d = (n*n/4) * (a*a + 1 + 4)
-                // d*d = (n*n/4) * (a*a + 5)
-                //
-                // Finally, solving for 'n' gives:
-                //
-                // n*n = 4 * d*d / (a*a + 5)
-                // n = 2 * d / sqrt(a*a + 5)
-
-                // Assumes a 45 degree horizontal field of view.
-                var aspectRatio = viewportHeight / viewportWidth;
-
-                return 2 * distanceToSurface / Math.sqrt(aspectRatio * aspectRatio + 5);
+                var tanHalfFov = Math.tan(0.5 * fovyDegrees / 180 * Math.PI);
+                return distanceToSurface / (2 * Math.sqrt(2 * tanHalfFov * tanHalfFov + 1));
             },
 
             /**
@@ -6930,11 +6903,6 @@ define('render/Texture',[
             this.size = image.width * image.height * 4;
 
             gl.bindTexture(gl.TEXTURE_2D, textureId);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER,
-                isPowerOfTwo ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
-
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapMode);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapMode);
 
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
             gl.texImage2D(gl.TEXTURE_2D, 0,
@@ -6955,6 +6923,9 @@ define('render/Texture',[
 
             // Internal use only. Intentionally not documented.
             this.texParameters = {};
+            this.texParameters[gl.TEXTURE_MIN_FILTER] = isPowerOfTwo ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR;
+            this.texParameters[gl.TEXTURE_WRAP_S] = wrapMode;
+            this.texParameters[gl.TEXTURE_WRAP_T] = wrapMode;
 
             // Internal use only. Intentionally not documented.
             // https://www.khronos.org/registry/webgl/extensions/EXT_texture_filter_anisotrop
@@ -7021,9 +6992,16 @@ define('render/Texture',[
         Texture.prototype.applyTexParameters = function (dc) {
             var gl = dc.currentGlContext;
 
-            // Configure the OpenGL texture magnification function. Use linear by default.
-            var textureMagFilter = this.texParameters[gl.TEXTURE_MAG_FILTER] || gl.LINEAR;
+            // Configure the OpenGL texture minification function. Use nearest in pickingMode or linear by default.
+            var textureMinFilter = dc.pickingMode ? gl.NEAREST : this.texParameters[gl.TEXTURE_MIN_FILTER] || gl.LINEAR;
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, textureMinFilter);
+
+            // Configure the OpenGL texture magnification function. Use nearest in pickingMode or linear by default.
+            var textureMagFilter = dc.pickingMode ? gl.NEAREST : this.texParameters[gl.TEXTURE_MAG_FILTER] || gl.LINEAR;
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, textureMagFilter);
+
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, this.texParameters[gl.TEXTURE_WRAP_S] || gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, this.texParameters[gl.TEXTURE_WRAP_T] || gl.CLAMP_TO_EDGE);
 
             // Try to enable the anisotropic texture filtering only if we have a linear magnification filter.
             // This can't be enabled all the time because Windows seems to ignore the TEXTURE_MAG_FILTER parameter when
@@ -7997,12 +7975,13 @@ define('geom/Matrix',[
          *
          * @param {Number} viewportWidth The viewport width, in screen coordinates.
          * @param {Number} viewportHeight The viewport height, in screen coordinates.
+         * @param {Number} fovyDegrees The camera vertical field of view.
          * @param {Number} nearDistance The near clip plane distance, in model coordinates.
          * @param {Number} farDistance The far clip plane distance, in model coordinates.
          * @throws {ArgumentError} If the specified width or height is less than or equal to zero, if the near and far
          * distances are equal, or if either the near or far distance are less than or equal to zero.
          */
-        Matrix.prototype.setToPerspectiveProjection = function (viewportWidth, viewportHeight, nearDistance, farDistance) {
+        Matrix.prototype.setToPerspectiveProjection = function (viewportWidth, viewportHeight, fovyDegrees, nearDistance, farDistance) {
             if (viewportWidth <= 0) {
                 throw new ArgumentError(Logger.logMessage(Logger.LEVEL_SEVERE, "Matrix", "setToPerspectiveProjection",
                     "invalidWidth"));
@@ -8011,6 +7990,11 @@ define('geom/Matrix',[
             if (viewportHeight <= 0) {
                 throw new ArgumentError(Logger.logMessage(Logger.LEVEL_SEVERE, "Matrix", "setToPerspectiveProjection",
                     "invalidHeight"));
+            }
+
+            if (fovyDegrees <= 0 || fovyDegrees >= 180) {
+                throw new ArgumentError(Logger.logMessage(Logger.LEVEL_SEVERE, "Matrix", "setToPerspectiveProjection",
+                    "invalidFieldOfView"));
             }
 
             if (nearDistance === farDistance) {
@@ -8023,24 +8007,23 @@ define('geom/Matrix',[
                     "Near or far distance is less than or equal to zero."));
             }
 
-            // Compute the dimensions of the viewport rectangle at the near distance.
-            var nearRect = WWMath.perspectiveFrustumRectangle(viewportWidth, viewportHeight, nearDistance),
-                left = nearRect.getMinX(),
-                right = nearRect.getMaxX(),
-                bottom = nearRect.getMinY(),
-                top = nearRect.getMaxY();
+            // Compute the dimensions of the near rectangle given the specified parameters.
+            var aspect = viewportWidth / viewportHeight,
+                tanfovy_2 = Math.tan(fovyDegrees * 0.5 / 180.0 * Math.PI),
+                nearHeight = 2 * nearDistance * tanfovy_2,
+                nearWidth = nearHeight * aspect;
 
             // Taken from Mathematics for 3D Game Programming and Computer Graphics, Second Edition, equation 4.52.
 
             // Row 1
-            this[0] = 2 * nearDistance / (right - left);
+            this[0] = 2 * nearDistance / nearWidth;
             this[1] = 0;
-            this[2] = (right + left) / (right - left);
+            this[2] = 0;
             this[3] = 0;
             // Row 2
             this[4] = 0;
-            this[5] = 2 * nearDistance / (top - bottom);
-            this[6] = (top + bottom) / (top - bottom);
+            this[5] = 2 * nearDistance / nearHeight;
+            this[6] = 0;
             this[7] = 0;
             // Row 3
             this[8] = 0;
@@ -8149,6 +8132,39 @@ define('geom/Matrix',[
             result[2] = -(this[2] * this[3]) - (this[6] * this[7]) - (this[10] * this[11]);
 
             return result;
+        };
+
+        /**
+         * Returns this viewing matrix's heading angle in degrees. The roll argument enables the caller to disambiguate
+         * heading and roll when the two rotation axes for heading and roll are parallel, causing gimbal lock.
+         * <p>
+         * The result of this method is undefined if this matrix is not a viewing matrix.
+         *
+         * @param {Number} roll the viewing matrix's roll angle in degrees, or 0 if the roll angle is unknown
+         *
+         * @return {Number} the extracted heading angle in degrees
+         */
+        Matrix.prototype.extractHeading = function (roll) {
+            var rad = roll * Angle.DEGREES_TO_RADIANS;
+            var cr = Math.cos(rad);
+            var sr = Math.sin(rad);
+
+            var ch = (cr * this[0]) - (sr * this[4]);
+            var sh = (sr * this[5]) - (cr * this[1]);
+            return Math.atan2(sh, ch) * Angle.RADIANS_TO_DEGREES;
+        };
+
+        /**
+         * Returns this viewing matrix's tilt angle in degrees.
+         * <p>
+         * The result of this method is undefined if this matrix is not a viewing matrix.
+         *
+         * @return {Number} the extracted heading angle in degrees
+         */
+        Matrix.prototype.extractTilt = function () {
+            var ct = this[10];
+            var st = Math.sqrt(this[2] * this[2] + this[6] * this[6]);
+            return Math.atan2(st, ct) * Angle.RADIANS_TO_DEGREES;
         };
 
         /**
@@ -8896,6 +8912,77 @@ define('geom/Matrix',[
             return result;
         };
 
+        /**
+         * Projects a Cartesian point to screen coordinates. This method assumes this matrix represents an inverse
+         * modelview-projection matrix. The result of this method is undefined if this matrix is not an inverse
+         * modelview-projection matrix.
+         * <p/>
+         * The resultant screen point is in OpenGL screen coordinates, with the origin in the bottom-left corner and axes
+         * that extend up and to the right from the origin.
+         * <p/>
+         * This stores the projected point in the result argument, and returns a boolean value indicating whether or not the
+         * projection is successful. This returns false if the Cartesian point is clipped by the near clipping plane or the
+         * far clipping plane.
+         *
+         * @param {Number}    x the Cartesian point's X component
+         * @param {Number}    y the Cartesian point's y component
+         * @param {Number}    z the Cartesian point's z component
+         * @param {Rectangle} viewport the viewport defining the screen point's coordinate system
+         * @param {Vec3}    result a pre-allocated {@link Vec3} in which to return the projected point
+         *
+         * @return {boolean} true if the transformation is successful, otherwise false
+         *
+         * @throws {ArgumentError} If any argument is null
+         */
+        Matrix.prototype.project = function (x, y, z, viewport, result) {
+            if (!viewport) {
+                throw new ArgumentError(Logger.logMessage(Logger.ERROR, "Matrix", "project",
+                    "missingViewport"));
+            }
+
+            if (!result) {
+                throw new ArgumentError(Logger.logMessage(Logger.ERROR, "Matrix", "project",
+                    "missingResult"));
+            }
+
+            // Transform the model point from model coordinates to eye coordinates then to clip coordinates. This inverts
+            // the Z axis and stores the negative of the eye coordinate Z value in the W coordinate.
+            var sx = this[0] * x + this[1] * y + this[2] * z + this[3];
+            var sy = this[4] * x + this[5] * y + this[6] * z + this[7];
+            var sz = this[8] * x + this[9] * y + this[10] * z + this[11];
+            var sw = this[12] * x + this[13] * y + this[14] * z + this[15];
+
+            if (sw === 0) {
+                return false;
+            }
+
+            // Complete the conversion from model coordinates to clip coordinates by dividing by W. The resultant X, Y
+            // and Z coordinates are in the range [-1,1].
+            sx /= sw;
+            sy /= sw;
+            sz /= sw;
+
+            // Clip the point against the near and far clip planes.
+            if (sz < -1 || sz > 1) {
+                return false;
+            }
+
+            // Convert the point from clip coordinate to the range [0,1]. This enables the X and Y coordinates to be
+            // converted to screen coordinates, and the Z coordinate to represent a depth value in the range[0,1].
+            sx = sx * 0.5 + 0.5;
+            sy = sy * 0.5 + 0.5;
+            sz = sz * 0.5 + 0.5;
+
+            // Convert the X and Y coordinates from the range [0,1] to screen coordinates.
+            sx = sx * viewport.width + viewport.x;
+            sy = sy * viewport.height + viewport.y;
+
+            result[0] = sx;
+            result[1] = sy;
+            result[2] = sz;
+
+            return true;
+        };
 
         /**
          * Transforms the specified screen point from WebGL screen coordinates to model coordinates. This method assumes
@@ -27599,7 +27686,7 @@ define('geom/BoundingBox',[
 
             try {
                 // Setup to transform unit cube coordinates to this bounding box's local coordinates, as viewed by the
-                // current navigator state.
+                // current camera state.
                 matrix.copy(dc.modelviewProjection);
                 matrix.multiply(
                     this.r[0], this.s[0], this.t[0], this.center[0],
@@ -29706,10 +29793,7 @@ define('shaders/GroundProgram',[
 /**
  * @exports Layer
  */
-define('layer/Layer',[
-        '../util/Logger'
-    ],
-    function (Logger) {
+define('layer/Layer',[], function () {
         "use strict";
 
         /**
@@ -29718,6 +29802,7 @@ define('layer/Layer',[
          * @constructor
          * @classdesc Provides an abstract base class for layer implementations. This class is not meant to be instantiated
          * directly.
+         * @param {String} displayName This layer's display name.
          */
         var Layer = function (displayName) {
 
@@ -29726,7 +29811,7 @@ define('layer/Layer',[
              * @type {String}
              * @default "Layer"
              */
-            this.displayName = displayName ? displayName : "Layer";
+            this.displayName = displayName || "Layer";
 
             /**
              * Indicates whether to display this layer.
@@ -30956,6 +31041,467 @@ define('util/BasicTimeSequence',[
         return BasicTimeSequence;
 
     });
+/*
+ * Copyright 2015-2017 WorldWind Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/**
+ * @exports LookAt
+ */
+define('geom/LookAt',[
+        '../error/ArgumentError',
+        '../util/Logger',
+        '../geom/Matrix',
+        '../geom/Position'
+    ],
+    function (ArgumentError,
+              Logger,
+              Matrix,
+              Position) {
+        "use strict";
+
+        var LookAt = function () {
+            /**
+             * The geographic position at the center of the viewport.
+             * @type {Location}
+             */
+            this.position = new Position(30, -110, 0);
+
+            /**
+             * Look at heading, in degrees clockwise from north.
+             * @type {Number}
+             * @default 0
+             */
+            this.heading = 0;
+
+            /**
+             * Look at tilt, in degrees.
+             * @type {Number}
+             * @default 0
+             */
+            this.tilt = 0;
+
+            /**
+             * Look at roll, in degrees.
+             * @type {Number}
+             * @default 0
+             */
+            this.roll = 0;
+
+            /**
+             * The distance from the eye point to its look at location.
+             * @type {Number}
+             * @default 10,000 kilometers
+             */
+            this.range = 10e6; // TODO: Compute initial range to fit globe in viewport.
+        };
+
+        /**
+         * Internal use only.
+         * Computes the model view matrix for this look at view.
+         * @ignore
+         */
+        LookAt.prototype.computeViewingTransform = function (globe, modelview) {
+            if (!globe) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "LookAt", "computeViewingTransform", "missingGlobe"));
+            }
+
+            if (!modelview) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "LookAt", "computeViewingTransform", "missingModelview"));
+            }
+
+            modelview.setToIdentity();
+            modelview.multiplyByLookAtModelview(this.position, this.range, this.heading, this.tilt, this.roll, globe);
+
+            return modelview;
+        };
+
+        /**
+         * Indicates whether the components of this object are equal to those of a specified object.
+         * @param {LookAt} otherLookAt The object to test equality with. May be null or undefined, in which case this
+         * function returns false.
+         * @returns {boolean} true if all components of this object are equal to the corresponding
+         * components of the specified object, otherwise false.
+         */
+        LookAt.prototype.equals = function (otherLookAt) {
+            if (otherLookAt) {
+                return this.position.equals(otherLookAt.position) &&
+                    this.heading === otherLookAt.heading &&
+                    this.tilt === otherLookAt.tilt &&
+                    this.roll === otherLookAt.roll &&
+                    this.range === otherLookAt.range;
+            }
+
+            return false;
+        };
+
+        /**
+         * Creates a new object that is a copy of this object.
+         * @returns {LookAt} The new object.
+         */
+        LookAt.prototype.clone = function () {
+            var clone = new LookAt();
+            clone.copy(this);
+
+            return clone;
+        };
+
+        /**
+         * Copies the components of a specified object to this object.
+         * @param {LookAt} copyObject The object to copy.
+         * @returns {LookAt} A copy of this object equal to copyObject.
+         * @throws {ArgumentError} If the specified object is null or undefined.
+         */
+        LookAt.prototype.copy = function (copyObject) {
+            if (!copyObject) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "LookAt", "copy", "missingObject"));
+            }
+
+            this.position.copy(copyObject.position);
+            this.heading = copyObject.heading;
+            this.tilt = copyObject.tilt;
+            this.roll = copyObject.roll;
+            this.range = copyObject.range;
+
+            return this;
+        };
+
+        /**
+         * Returns a string representation of this object.
+         * @returns {String}
+         */
+        LookAt.prototype.toString = function () {
+            return this.position.toString() + "," + this.heading + "\u00b0," + this.tilt + "\u00b0," + this.roll + "\u00b0";
+        };
+
+        return LookAt;
+    });
+/*
+ * Copyright 2015-2017 WorldWind Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/**
+ * @exports Camera
+ */
+define('geom/Camera',[
+        '../error/ArgumentError',
+        '../geom/Line',
+        '../util/Logger',
+        '../geom/LookAt',
+        '../geom/Matrix',
+        '../geom/Position',
+        '../geom/Vec3',
+        '../util/WWMath'
+    ],
+    function (ArgumentError,
+              Line,
+              Logger,
+              LookAt,
+              Matrix,
+              Position,
+              Vec3,
+              WWMath) {
+        "use strict";
+
+        var Camera = function (worldWindow) {
+            if (!worldWindow) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "Camera", "constructor", "missingWorldWindow"));
+            }
+
+            /**
+             * The WorldWindow associated with this camera.
+             * @type {WorldWindow}
+             * @readonly
+             */
+            this.wwd = worldWindow;
+
+            /**
+             * The geographic location of the camera.
+             * @type {Location}
+             */
+            this.position = new Position(30, -110, 10e6);
+
+            /**
+             * Camera heading, in degrees clockwise from north.
+             * @type {Number}
+             * @default 0
+             */
+            this.heading = 0;
+
+            /**
+             * Camera tilt, in degrees.
+             * @default 0
+             */
+            this.tilt = 0;
+
+            /**
+             * Camera roll, in degrees.
+             * @type {Number}
+             * @default 0
+             */
+            this.roll = 0;
+
+            /**
+             * Camera vertical field of view, in degrees
+             * @type {Number}
+             * @default 45
+             */
+            this.fieldOfView = 45;
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold model view matrices during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchModelview = Matrix.fromIdentity();
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold points during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchPoint = new Vec3(0, 0, 0);
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold origin matrices during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchOrigin = Matrix.fromIdentity();
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold positions during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchPosition = new Position(0, 0, 0);
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold lines during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchRay = new Line(new Vec3(0, 0, 0), new Vec3(0, 0, 0));
+        };
+
+        /**
+         * Internal use only.
+         * Computes the model view matrix for this camera.
+         * @ignore
+         */
+        Camera.prototype.computeViewingTransform = function (modelview) {
+            if (!modelview) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "Camera", "computeViewingTransform", "missingModelview"));
+            }
+
+            modelview.setToIdentity();
+            modelview.multiplyByFirstPersonModelview(this.position, this.heading, this.tilt, this.roll, this.wwd.globe);
+
+            return modelview;
+        };
+
+        /**
+         * Indicates whether the components of this object are equal to those of a specified object.
+         * @param {Camera} otherView The object to test equality with. May be null or undefined, in which case this
+         * function returns false.
+         * @returns {boolean} true if all components of this object are equal to the corresponding
+         * components of the specified object, otherwise false.
+         */
+        Camera.prototype.equals = function (otherView) {
+            if (otherView) {
+                return this.position.equals(otherView.position) &&
+                    this.heading === otherView.heading &&
+                    this.tilt === otherView.tilt &&
+                    this.roll === otherView.roll;
+            }
+
+            return false;
+        };
+
+        /**
+         * Creates a new object that is a copy of this object.
+         * @returns {Camera} The new object.
+         */
+        Camera.prototype.clone = function () {
+            var clone = new Camera(this.wwd);
+            clone.copy(this);
+
+            return clone;
+        };
+
+        /**
+         * Copies the components of a specified object to this object.
+         * @param {Camera} copyObject The object to copy.
+         * @returns {Camera} A copy of this object equal to copyObject.
+         * @throws {ArgumentError} If the specified object is null or undefined.
+         */
+        Camera.prototype.copy = function (copyObject) {
+            if (!copyObject) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "Camera", "copy", "missingObject"));
+            }
+
+            this.wwd = copyObject.wwd;
+            this.position.copy(copyObject.position);
+            this.heading = copyObject.heading;
+            this.tilt = copyObject.tilt;
+            this.roll = copyObject.roll;
+
+            return this;
+        };
+
+        /**
+         * Sets the properties of this Camera such that it mimics the supplied look at view. Note that repeated conversions
+         * between a look at and a camera view may result in view errors due to rounding.
+         * @param {LookAt} lookAt The look at view to mimic.
+         * @returns {Camera} This camera set to mimic the supplied look at view.
+         * @throws {ArgumentError} If the specified look at view is null or undefined.
+         */
+        Camera.prototype.setFromLookAt = function (lookAt) {
+            if (!lookAt) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "Camera", "setFromLookAt", "missingLookAt"));
+            }
+
+            var globe = this.wwd.globe,
+                ve = this.wwd.verticalExaggeration,
+                ray = this.scratchRay,
+                originPoint = this.scratchPoint,
+                modelview = this.scratchModelview,
+                origin = this.scratchOrigin;
+
+            lookAt.computeViewingTransform(globe, modelview);
+            modelview.extractEyePoint(originPoint);
+
+            globe.computePositionFromPoint(originPoint[0], originPoint[1], originPoint[2], this.position);
+            origin.setToIdentity();
+            origin.multiplyByLocalCoordinateTransform(originPoint, globe);
+            modelview.multiplyMatrix(origin);
+
+            this.heading = modelview.extractHeading(lookAt.roll); // disambiguate heading and roll
+            this.tilt = modelview.extractTilt();
+            this.roll = lookAt.roll; // roll passes straight through
+
+            // Check if camera altitude is not under the surface and correct tilt
+            var elevation = globe.elevationAtLocation(this.position.latitude, this.position.longitude) * ve + 10.0; // 10m above surface
+            if(elevation > this.position.altitude) {
+                // Set camera altitude above the surface
+                this.position.altitude = elevation;
+                // Compute new camera point
+                globe.computePointFromPosition(this.position.latitude, this.position.longitude, this.position.altitude, originPoint);
+                // Compute look at point
+                globe.computePointFromPosition(lookAt.position.latitude, lookAt.position.longitude, lookAt.position.altitude, ray.origin);
+                // Compute normal to globe in look at point
+                globe.surfaceNormalAtLocation(lookAt.position.latitude, lookAt.position.longitude, ray.direction);
+                // Calculate tilt angle between new camera point and look at point
+                originPoint.subtract(ray.origin).normalize();
+                var dot = ray.direction.dot(originPoint);
+                if (dot >= -1 || dot <= 1) {
+                    this.tilt = Math.acos(dot) / Math.PI * 180;
+                }
+            }
+
+            return this;
+        };
+
+        /**
+         * Converts the properties of this Camera to those of a look at view. Note that repeated conversions
+         * between a look at and a camera view may result in view errors due to rounding.
+         * @param {LookAt} result The look at view to hold the converted properties.
+         * @returns {LookAt} A reference to the result parameter.
+         * @throws {ArgumentError} If the specified result object is null or undefined.
+         */
+        Camera.prototype.getAsLookAt = function (result) {
+            if (!result) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "Camera", "getAsLookAt", "missingResult"));
+            }
+
+            var globe = this.wwd.globe,
+                viewport = this.wwd.viewport,
+                forwardRay = this.scratchRay,
+                modelview = this.scratchModelview,
+                originPoint = this.scratchPoint,
+                originPos = this.scratchPosition,
+                origin = this.scratchOrigin;
+
+            this.computeViewingTransform(modelview);
+
+            // Pick terrain located behind the viewport center point
+            var terrainObject = this.wwd.pick([viewport.width / 2, viewport.height / 2]).terrainObject();
+            if (terrainObject) {
+                // Use picked terrain position including approximate rendered altitude
+                originPos.copy(terrainObject.position);
+                globe.computePointFromPosition(originPos.latitude, originPos.longitude, originPos.altitude, originPoint);
+            } else {
+                // Center is outside the globe - use point on horizon
+                modelview.extractEyePoint(forwardRay.origin);
+                modelview.extractForwardVector(forwardRay.direction);
+
+                var globeRadius = WWMath.max(globe.equatorialRadius, globe.polarRadius);
+                var horizon = WWMath.horizonDistanceForGlobeRadius(globeRadius, this.position.altitude);
+                forwardRay.pointAt(horizon, originPoint);
+
+                globe.computePositionFromPoint(originPoint[0], originPoint[1], originPoint[2], originPos);
+            }
+
+            origin.setToIdentity();
+            origin.multiplyByLocalCoordinateTransform(originPoint, globe);
+            modelview.multiplyMatrix(origin);
+
+            result.position.copy(originPos);
+            result.range = -modelview[11];
+            result.heading = modelview.extractHeading(this.roll); // disambiguate heading and roll
+            result.tilt = modelview.extractTilt();
+            result.roll = this.roll; // roll passes straight through
+
+            return result;
+        };
+
+        /**
+         * Returns a string representation of this object.
+         * @returns {String}
+         */
+        Camera.prototype.toString = function () {
+            return this.position.toString() + "," + this.heading + "\u00b0," + this.tilt + "\u00b0," + this.roll + "\u00b0";
+        };
+
+        return Camera;
+    });
+
+
 /*
  * Copyright 2003-2006, 2009, 2017, United States Government, as represented by the Administrator of the
  * National Aeronautics and Space Administration. All rights reserved.
@@ -33080,10 +33626,12 @@ define('WorldWindowController',[
 define('BasicWorldWindowController',[
         './geom/Angle',
         './error/ArgumentError',
+        './geom/Camera',
         './gesture/ClickRecognizer',
         './gesture/DragRecognizer',
         './gesture/GestureRecognizer',
         './util/Logger',
+        './geom/LookAt',
         './geom/Matrix',
         './gesture/PanRecognizer',
         './gesture/PinchRecognizer',
@@ -33098,10 +33646,12 @@ define('BasicWorldWindowController',[
     ],
     function (Angle,
               ArgumentError,
+              Camera,
               ClickRecognizer,
               DragRecognizer,
               GestureRecognizer,
               Logger,
+              LookAt,
               Matrix,
               PanRecognizer,
               PinchRecognizer,
@@ -33175,10 +33725,21 @@ define('BasicWorldWindowController',[
             // Intentionally not documented.
             this.beginPoint = new Vec2(0, 0);
             this.lastPoint = new Vec2(0, 0);
-            this.beginHeading = 0;
-            this.beginTilt = 0;
-            this.beginRange = 0;
             this.lastRotation = 0;
+
+            /**
+             * Internal use only.
+             * A copy of the viewing parameters at the start of a gesture as a look at view.
+             * @ignore
+             */
+            this.beginLookAt = new LookAt();
+
+            /**
+             * Internal use only.
+             * The current state of the viewing parameters during a gesture as a look at view.
+             * @ignore
+             */
+            this.lookAt = new LookAt();
         };
 
         BasicWorldWindowController.prototype = Object.create(WorldWindowController.prototype);
@@ -33260,31 +33821,33 @@ define('BasicWorldWindowController',[
                 tx = recognizer.translationX,
                 ty = recognizer.translationY;
 
-            var navigator = this.wwd.navigator;
             if (state === WorldWind.BEGAN) {
+                this.gestureDidBegin();
                 this.lastPoint.set(0, 0);
             } else if (state === WorldWind.CHANGED) {
-                // Convert the translation from screen coordinates to arc degrees. Use this navigator's range as a
+                // Convert the translation from screen coordinates to arc degrees. Use the view's range as a
                 // metric for converting screen pixels to meters, and use the globe's radius for converting from meters
                 // to arc degrees.
-                var canvas = this.wwd.canvas,
+                var lookAt = this.lookAt,
+                    canvas = this.wwd.canvas,
                     globe = this.wwd.globe,
                     globeRadius = WWMath.max(globe.equatorialRadius, globe.polarRadius),
-                    distance = WWMath.max(1, navigator.range),
+                    distance = WWMath.max(1, lookAt.range),
                     metersPerPixel = WWMath.perspectivePixelSize(canvas.clientWidth, canvas.clientHeight, distance),
                     forwardMeters = (ty - this.lastPoint[1]) * metersPerPixel,
                     sideMeters = -(tx - this.lastPoint[0]) * metersPerPixel,
                     forwardDegrees = (forwardMeters / globeRadius) * Angle.RADIANS_TO_DEGREES,
                     sideDegrees = (sideMeters / globeRadius) * Angle.RADIANS_TO_DEGREES;
 
-                // Apply the change in latitude and longitude to this navigator, relative to the current heading.
-                var sinHeading = Math.sin(navigator.heading * Angle.DEGREES_TO_RADIANS),
-                    cosHeading = Math.cos(navigator.heading * Angle.DEGREES_TO_RADIANS);
+                // Apply the change in latitude and longitude to the view, relative to the current heading.
+                var sinHeading = Math.sin(lookAt.heading * Angle.DEGREES_TO_RADIANS),
+                    cosHeading = Math.cos(lookAt.heading * Angle.DEGREES_TO_RADIANS);
 
-                navigator.lookAtLocation.latitude += forwardDegrees * cosHeading - sideDegrees * sinHeading;
-                navigator.lookAtLocation.longitude += forwardDegrees * sinHeading + sideDegrees * cosHeading;
+                lookAt.position.latitude += forwardDegrees * cosHeading - sideDegrees * sinHeading;
+                lookAt.position.longitude += forwardDegrees * sinHeading + sideDegrees * cosHeading;
                 this.lastPoint.set(tx, ty);
-                this.applyLimits();
+                this.applyLookAtLimits(lookAt);
+                this.wwd.camera.setFromLookAt(lookAt);
                 this.wwd.redraw();
             }
         };
@@ -33297,8 +33860,8 @@ define('BasicWorldWindowController',[
                 tx = recognizer.translationX,
                 ty = recognizer.translationY;
 
-            var navigator = this.wwd.navigator;
             if (state === WorldWind.BEGAN) {
+                this.gestureDidBegin();
                 this.beginPoint.set(x, y);
                 this.lastPoint.set(x, y);
             } else if (state === WorldWind.CHANGED) {
@@ -33309,7 +33872,8 @@ define('BasicWorldWindowController',[
 
                 this.lastPoint.set(x2, y2);
 
-                var globe = this.wwd.globe,
+                var lookAt = this.lookAt,
+                    globe = this.wwd.globe,
                     ray = this.wwd.rayThroughScreenPoint(this.wwd.canvasCoordinates(x1, y1)),
                     point1 = new Vec3(0, 0, 0),
                     point2 = new Vec3(0, 0, 0),
@@ -33324,27 +33888,28 @@ define('BasicWorldWindowController',[
                     return;
                 }
 
-                // Transform the original navigator state's modelview matrix to account for the gesture's change.
+                // Transform the original view's modelview matrix to account for the gesture's change.
                 var modelview = Matrix.fromIdentity();
-                this.wwd.computeViewingTransform(null, modelview);
+                lookAt.computeViewingTransform(globe, modelview);
                 modelview.multiplyByTranslation(point2[0] - point1[0], point2[1] - point1[1], point2[2] - point1[2]);
 
-                // Compute the globe point at the screen center from the perspective of the transformed navigator state.
+                // Compute the globe point at the screen center from the perspective of the transformed view.
                 modelview.extractEyePoint(ray.origin);
                 modelview.extractForwardVector(ray.direction);
                 if (!globe.intersectsLine(ray, origin)) {
                     return;
                 }
 
-                // Convert the transformed modelview matrix to a set of navigator properties, then apply those
-                // properties to this navigator.
-                var params = modelview.extractViewingParameters(origin, navigator.roll, globe, {});
-                navigator.lookAtLocation.copy(params.origin);
-                navigator.range = params.range;
-                navigator.heading = params.heading;
-                navigator.tilt = params.tilt;
-                navigator.roll = params.roll;
-                this.applyLimits();
+                // Convert the transformed modelview matrix to a set of view properties, then apply those
+                // properties to this view.
+                var params = modelview.extractViewingParameters(origin, lookAt.roll, globe, {});
+                lookAt.position.copy(params.origin);
+                lookAt.range = params.range;
+                lookAt.heading = params.heading;
+                lookAt.tilt = params.tilt;
+                lookAt.roll = params.roll;
+                this.applyLookAtLimits(lookAt);
+                this.wwd.camera.setFromLookAt(lookAt);
                 this.wwd.redraw();
             }
         };
@@ -33355,38 +33920,39 @@ define('BasicWorldWindowController',[
                 tx = recognizer.translationX,
                 ty = recognizer.translationY;
 
-            var navigator = this.wwd.navigator;
             if (state === WorldWind.BEGAN) {
-                this.beginHeading = navigator.heading;
-                this.beginTilt = navigator.tilt;
+                this.gestureDidBegin();
             } else if (state === WorldWind.CHANGED) {
                 // Compute the current translation from screen coordinates to degrees. Use the canvas dimensions as a
                 // metric for converting the gesture translation to a fraction of an angle.
-                var headingDegrees = 180 * tx / this.wwd.canvas.clientWidth,
+                var lookAt = this.lookAt,
+                    headingDegrees = 180 * tx / this.wwd.canvas.clientWidth,
                     tiltDegrees = 90 * ty / this.wwd.canvas.clientHeight;
 
-                // Apply the change in heading and tilt to this navigator's corresponding properties.
-                navigator.heading = this.beginHeading + headingDegrees;
-                navigator.tilt = this.beginTilt + tiltDegrees;
-                this.applyLimits();
+                // Apply the change in heading and tilt to this view's corresponding properties.
+                lookAt.heading = this.beginLookAt.heading + headingDegrees;
+                lookAt.tilt = this.beginLookAt.tilt + tiltDegrees;
+                this.applyLookAtLimits(lookAt);
+                this.wwd.camera.setFromLookAt(lookAt);
                 this.wwd.redraw();
             }
         };
 
         // Intentionally not documented.
         BasicWorldWindowController.prototype.handlePinch = function (recognizer) {
-            var navigator = this.wwd.navigator;
             var state = recognizer.state,
                 scale = recognizer.scale;
 
             if (state === WorldWind.BEGAN) {
-                this.beginRange = navigator.range;
+                this.gestureDidBegin();
             } else if (state === WorldWind.CHANGED) {
                 if (scale !== 0) {
-                    // Apply the change in pinch scale to this navigator's range, relative to the range when the gesture
+                    // Apply the change in pinch scale to this view's range, relative to the range when the gesture
                     // began.
-                    navigator.range = this.beginRange / scale;
-                    this.applyLimits();
+                    var lookAt = this.lookAt;
+                    lookAt.range = this.beginLookAt.range / scale;
+                    this.applyLookAtLimits(lookAt);
+                    this.wwd.camera.setFromLookAt(lookAt);
                     this.wwd.redraw();
                 }
             }
@@ -33394,45 +33960,48 @@ define('BasicWorldWindowController',[
 
         // Intentionally not documented.
         BasicWorldWindowController.prototype.handleRotation = function (recognizer) {
-            var navigator = this.wwd.navigator;
             var state = recognizer.state,
                 rotation = recognizer.rotation;
 
             if (state === WorldWind.BEGAN) {
+                this.gestureDidBegin();
                 this.lastRotation = 0;
             } else if (state === WorldWind.CHANGED) {
-                // Apply the change in gesture rotation to this navigator's current heading. We apply relative to the
+                // Apply the change in gesture rotation to this view's current heading. We apply relative to the
                 // current heading rather than the heading when the gesture began in order to work simultaneously with
                 // pan operations that also modify the current heading.
-                navigator.heading -= rotation - this.lastRotation;
+                var lookAt = this.lookAt;
+                lookAt.heading -= rotation - this.lastRotation;
                 this.lastRotation = rotation;
-                this.applyLimits();
+                this.applyLookAtLimits(lookAt);
+                this.wwd.camera.setFromLookAt(lookAt);
                 this.wwd.redraw();
             }
         };
 
         // Intentionally not documented.
         BasicWorldWindowController.prototype.handleTilt = function (recognizer) {
-            var navigator = this.wwd.navigator;
             var state = recognizer.state,
                 ty = recognizer.translationY;
 
             if (state === WorldWind.BEGAN) {
-                this.beginTilt = navigator.tilt;
+                this.gestureDidBegin();
             } else if (state === WorldWind.CHANGED) {
                 // Compute the gesture translation from screen coordinates to degrees. Use the canvas dimensions as a
                 // metric for converting the translation to a fraction of an angle.
                 var tiltDegrees = -90 * ty / this.wwd.canvas.clientHeight;
-                // Apply the change in heading and tilt to this navigator's corresponding properties.
-                navigator.tilt = this.beginTilt + tiltDegrees;
-                this.applyLimits();
+                // Apply the change in heading and tilt to this view's corresponding properties.
+                var lookAt = this.lookAt;
+                lookAt.tilt = this.beginTilt + tiltDegrees;
+                this.applyLookAtLimits(lookAt);
+                this.wwd.camera.setFromLookAt(lookAt);
                 this.wwd.redraw();
             }
         };
 
         // Intentionally not documented.
         BasicWorldWindowController.prototype.handleWheelEvent = function (event) {
-            var navigator = this.wwd.navigator;
+            var lookAt = this.wwd.camera.getAsLookAt(this.lookAt);
             // Normalize the wheel delta based on the wheel delta mode. This produces a roughly consistent delta across
             // browsers and input devices.
             var normalizedDelta;
@@ -33445,47 +34014,70 @@ define('BasicWorldWindowController',[
             }
 
             // Compute a zoom scale factor by adding a fraction of the normalized delta to 1. When multiplied by the
-            // navigator's range, this has the effect of zooming out or zooming in depending on whether the delta is
+            // view's range, this has the effect of zooming out or zooming in depending on whether the delta is
             // positive or negative, respectfully.
             var scale = 1 + (normalizedDelta / 1000);
 
-            // Apply the scale to this navigator's properties.
-            navigator.range *= scale;
-            this.applyLimits();
+            // Apply the scale to this view's properties.
+            lookAt.range *= scale;
+            this.applyLookAtLimits(lookAt);
+            this.wwd.camera.setFromLookAt(lookAt);
             this.wwd.redraw();
         };
 
-        // Documented in super-class.
-        BasicWorldWindowController.prototype.applyLimits = function () {
-            var navigator = this.wwd.navigator;
-
+        /**
+         * Internal use only.
+         * Limits the properties of a look at view to prevent unwanted navigation behaviour.
+         * @ignore
+         */
+        BasicWorldWindowController.prototype.applyLookAtLimits = function (lookAt) {
             // Clamp latitude to between -90 and +90, and normalize longitude to between -180 and +180.
-            navigator.lookAtLocation.latitude = WWMath.clamp(navigator.lookAtLocation.latitude, -90, 90);
-            navigator.lookAtLocation.longitude = Angle.normalizedDegreesLongitude(navigator.lookAtLocation.longitude);
+            lookAt.position.latitude = WWMath.clamp(lookAt.position.latitude, -90, 90);
+            lookAt.position.longitude = Angle.normalizedDegreesLongitude(lookAt.position.longitude);
 
-            // Clamp range to values greater than 1 in order to prevent degenerating to a first-person navigator when
+            // Clamp range to values greater than 1 in order to prevent degenerating to a first-person lookAt when
             // range is zero.
-            navigator.range = WWMath.clamp(navigator.range, 1, Number.MAX_VALUE);
+            lookAt.range = WWMath.clamp(lookAt.range, 1, Number.MAX_VALUE);
 
             // Normalize heading to between -180 and +180.
-            navigator.heading = Angle.normalizedDegrees(navigator.heading);
+            lookAt.heading = Angle.normalizedDegrees(lookAt.heading);
 
             // Clamp tilt to between 0 and +90 to prevent the viewer from going upside down.
-            navigator.tilt = WWMath.clamp(navigator.tilt, 0, 90);
+            lookAt.tilt = WWMath.clamp(lookAt.tilt, 0, 90);
 
             // Normalize heading to between -180 and +180.
-            navigator.roll = Angle.normalizedDegrees(navigator.roll);
+            lookAt.roll = Angle.normalizedDegrees(lookAt.roll);
 
             // Apply 2D limits when the globe is 2D.
-            if (this.wwd.globe.is2D() && navigator.enable2DLimits) {
+            if (this.wwd.globe.is2D()) {
                 // Clamp range to prevent more than 360 degrees of visible longitude. Assumes a 45 degree horizontal
                 // field of view.
                 var maxRange = 2 * Math.PI * this.wwd.globe.equatorialRadius;
-                navigator.range = WWMath.clamp(navigator.range, 1, maxRange);
+                lookAt.range = WWMath.clamp(lookAt.range, 1, maxRange);
 
                 // Force tilt to 0 when in 2D mode to keep the viewer looking straight down.
-                navigator.tilt = 0;
+                lookAt.tilt = 0;
             }
+        };
+
+        /**
+         * Documented in super-class.
+         * @ignore
+         */
+        BasicWorldWindowController.prototype.applyLimits = function () {
+            var lookAt = this.wwd.camera.getAsLookAt(this.lookAt);
+            this.applyLookAtLimits(lookAt);
+            this.wwd.camera.setFromLookAt(lookAt);
+        };
+
+        /**
+         * Internal use only.
+         * Sets common variables at the beginning of gesture.
+         * @ignore
+         */
+        BasicWorldWindowController.prototype.gestureDidBegin = function () {
+            this.wwd.camera.getAsLookAt(this.beginLookAt);
+            this.lookAt.copy(this.beginLookAt);
         };
 
         return BasicWorldWindowController;
@@ -34247,6 +34839,7 @@ define('layer/TiledImageLayer',[
          * Layers of this type are by default not pickable. Their pick-enabled flag is initialized to false.
          *
          * @augments Layer
+         * @param {String} displayName This layer's display name.
          * @param {Sector} sector The sector this layer covers.
          * @param {Location} levelZeroDelta The size in latitude and longitude of level zero (lowest resolution) tiles.
          * @param {Number} numLevels The number of levels to define for the layer. Each level is successively one power
@@ -34261,7 +34854,7 @@ define('layer/TiledImageLayer',[
          * null or undefined, or if the specified number of levels, tile width or tile height is less than 1.
          *
          */
-        var TiledImageLayer = function (sector, levelZeroDelta, numLevels, imageFormat, cachePath, tileWidth, tileHeight) {
+        var TiledImageLayer = function (displayName, sector, levelZeroDelta, numLevels, imageFormat, cachePath, tileWidth, tileHeight) {
             if (!sector) {
                 throw new ArgumentError(
                     Logger.logMessage(Logger.LEVEL_SEVERE, "TiledImageLayer", "constructor", "missingSector"));
@@ -34297,7 +34890,7 @@ define('layer/TiledImageLayer',[
                         "The specified tile width or height is less than one."));
             }
 
-            Layer.call(this, "Tiled Image Layer");
+            Layer.call(this, displayName || "Tiled Image Layer");
 
             this.retrievalImageFormat = imageFormat;
             this.cachePath = cachePath;
@@ -34759,12 +35352,14 @@ define('layer/TiledImageLayer',[
 define('layer/MercatorTiledImageLayer',[
         '../util/Color',
         '../geom/Sector',
+        '../geom/Location',
         '../layer/TiledImageLayer',
         '../geom/Vec2',
         '../util/WWMath'
     ],
     function (Color,
               Sector,
+              Location,
               TiledImageLayer,
               Vec2,
               WWMath) {
@@ -34777,25 +35372,43 @@ define('layer/MercatorTiledImageLayer',[
          * @augments TiledImageLayer
          * @classdesc Provides an abstract layer to support Mercator layers.
          *
-         * @param {Sector} sector The sector this layer covers.
-         * @param {Location} levelZeroDelta The size in latitude and longitude of level zero (lowest resolution) tiles.
+         * @param {String} displayName This layer's display name.
          * @param {Number} numLevels The number of levels to define for the layer. Each level is successively one power
          * of two higher resolution than the next lower-numbered level. (0 is the lowest resolution level, 1 is twice
          * that resolution, etc.)
          * Each level contains four times as many tiles as the next lower-numbered level, each 1/4 the geographic size.
          * @param {String} imageFormat The mime type of the image format for the layer's tiles, e.g., <em>image/png</em>.
          * @param {String} cachePath A string uniquely identifying this layer relative to other layers.
-         * @param {Number} tileWidth The horizontal size of image tiles in pixels.
-         * @param {Number} tileHeight The vertical size of image tiles in pixels.
-         * @throws {ArgumentError} If any of the specified sector, level-zero delta, cache path or image format arguments are
-         * null or undefined, or if the specified number of levels, tile width or tile height is less than 1.
+         * @param {Number} imageSize The horizontal and vertical size of image tiles in pixels.
+         * @param {Number} firstLevelOffset The level offset to skip applying one tile over whole globe and start from e.g. 8x8 tiles.
+         * @throws {ArgumentError} If any of the specified cache path or image format arguments are
+         * null or undefined, or if the specified number of levels or tile size is less than 1.
          */
-        var MercatorTiledImageLayer = function (sector, levelZeroDelta, numLevels, imageFormat, cachePath,
-                                                tileWidth, tileHeight) {
-            TiledImageLayer.call(this,
-                sector, levelZeroDelta, numLevels, imageFormat, cachePath, tileWidth, tileHeight);
+        var MercatorTiledImageLayer = function (displayName, numLevels, imageFormat, cachePath, imageSize, firstLevelOffset) {
+
+            function gudermannian(percent) {
+                var x = percent * Math.PI;
+                // var sinh = (Math.exp(x) - Math.exp(-x)) / 2;
+                var y = Math.exp(x);
+                var sinh = (y - 1 / y) / 2;
+                return Math.atan(sinh) * 180 / Math.PI;
+            }
+
+            function levelZeroDelta(firstLevelOffset) {
+                var levelZeroDelta = 360 / (1 << firstLevelOffset);
+                return new Location(levelZeroDelta / 2, levelZeroDelta);
+            }
+
+            var sector = new Sector(
+                gudermannian(-1), gudermannian(1), -180, 180
+            );
+
+            TiledImageLayer.call(this, displayName,
+                sector, levelZeroDelta(firstLevelOffset), numLevels - firstLevelOffset, imageFormat, cachePath, imageSize, imageSize);
 
             this.detectBlankImages = false;
+            this.imageSize = imageSize;
+            this.firstLevelOffset = firstLevelOffset;
 
             // These pixels are tested in retrieved images to determine whether the image is blank.
             this.testPixels = [
@@ -34917,6 +35530,36 @@ define('layer/MercatorTiledImageLayer',[
             return true;
         };
 
+        /**
+         * Calculates map size in pixels for specified level.
+         *
+         * @param {Number} levelNumber The number of level to calculate map size for.
+         */
+        MercatorTiledImageLayer.prototype.mapSizeForLevel = function(levelNumber) {
+            return this.imageSize << (levelNumber + this.firstLevelOffset);
+        };
+
+        // Overridden from TiledImageLayer to add possibility to create simple child layers with URL builder built-in.
+        MercatorTiledImageLayer.prototype.resourceUrlForTile = function(tile, imageFormat) {
+            if (this.urlBuilder) {
+                return this.urlBuilder.urlForTile(tile, imageFormat);
+            } else {
+                return this.getImageSourceUrl(tile.column, tile.row, tile.level.levelNumber + this.firstLevelOffset);
+            }
+        };
+
+        /**
+         * Simple version of URL builder based on commonly used by online maps input parameters x, y and z.
+         *
+         * @param {Number} x The X coordinate of tile.
+         * @param {Number} y The Y coordinate of tile.
+         * @param {Number} z The zoom level of tile.
+         */
+        MercatorTiledImageLayer.prototype.getImageSourceUrl = function(x, y, z) {
+            // Intentionally empty. Can be override in child layer and return URL for specified tile instead of builder
+            return null;
+        };
+
         return MercatorTiledImageLayer;
     }
 );
@@ -34943,21 +35586,15 @@ define('layer/MercatorTiledImageLayer',[
  * @exports BingTiledImageLayer
  */
 define('layer/BingTiledImageLayer',[
-        '../geom/Angle',
         '../util/Color',
-        '../geom/Location',
-        '../util/Offset',
         '../shapes/ScreenImage',
-        '../geom/Sector',
-        '../layer/MercatorTiledImageLayer'
+        '../layer/MercatorTiledImageLayer',
+        '../WorldWind'
     ],
-    function (Angle,
-              Color,
-              Location,
-              Offset,
+    function (Color,
               ScreenImage,
-              Sector,
-              MercatorTiledImageLayer) {
+              MercatorTiledImageLayer,
+              WorldWind) {
         "use strict";
 
         /**
@@ -34972,19 +35609,13 @@ define('layer/BingTiledImageLayer',[
          * @param {String} displayName This layer's display name.
          */
         var BingTiledImageLayer = function (displayName) {
-            this.imageSize = 256;
-
-            MercatorTiledImageLayer.call(this,
-                new Sector(-85.05, 85.05, -180, 180), new Location(85.05, 180), 23, "image/jpeg", displayName,
-                this.imageSize, this.imageSize);
-
-            this.displayName = displayName;
+            MercatorTiledImageLayer.call(this, displayName, 23, "image/jpeg", displayName, 256, 1);
 
             // TODO: Picking is enabled as a temporary measure for screen credit hyperlinks to work (see Layer.render)
             this.pickEnabled = true;
 
             this.detectBlankImages = true;
-            
+
             // Set the detail control so the resolution is a close match 
             // to the resolution on the Bing maps website
             this.detailControl = 1.25;
@@ -35006,16 +35637,6 @@ define('layer/BingTiledImageLayer',[
             }
         };
 
-        // Overridden from TiledImageLayer.
-        BingTiledImageLayer.prototype.createTopLevelTiles = function (dc) {
-            this.topLevelTiles = [];
-
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 0, 0));
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 0, 1));
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 1, 0));
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 1, 1));
-        };
-
         BingTiledImageLayer.prototype.renderLogo = function (dc) {
             if (!BingTiledImageLayer.logoImage) {
                 BingTiledImageLayer.logoImage = new ScreenImage(WorldWind.configuration.bingLogoPlacement,
@@ -35029,11 +35650,6 @@ define('layer/BingTiledImageLayer',[
                 BingTiledImageLayer.logoImage.render(dc);
                 BingTiledImageLayer.logoLastFrameTime = dc.timestamp;
             }
-        };
-
-        // Determines the Bing map size for a specified level number.
-        BingTiledImageLayer.prototype.mapSizeForLevel = function (levelNumber) {
-            return 256 << (levelNumber + 1);
         };
 
         return BingTiledImageLayer;
@@ -35465,11 +36081,8 @@ define('layer/BMNGLandsatLayer',[
          */
         var BMNGLandsatLayer = function () {
             // This LevelSet configuration captures the Landsat resolution of 1.38889E-04 degrees/pixel
-            TiledImageLayer.call(this,
+            TiledImageLayer.call(this, "Blue Marble & Landsat",
                 Sector.FULL_SPHERE, new Location(45, 45), 12, "image/jpeg", "BMNGLandsat256", 256, 256);
-
-            this.displayName = "Blue Marble & Landsat";
-            this.pickEnabled = false;
 
             this.urlBuilder = new WmsUrlBuilder("https://worldwind25.arc.nasa.gov/wms",
                 "BlueMarble-200405,esat", "", "1.3.0");
@@ -35522,11 +36135,8 @@ define('layer/BMNGLayer',[
          */
         var BMNGLayer = function (layerName) {
             // This LevelSet configuration captures the Blue Marble resolution of 4.166666667E-03 degrees/pixel
-            TiledImageLayer.call(this,
+            TiledImageLayer.call(this, "Blue Marble",
                 Sector.FULL_SPHERE, new Location(45, 45), 7, "image/jpeg", layerName || "BMNG256", 256, 256);
-
-            this.displayName = "Blue Marble";
-            this.pickEnabled = false;
 
             this.urlBuilder = new WmsUrlBuilder("https://worldwind25.arc.nasa.gov/wms",
                 layerName || "BlueMarble-200405", "", "1.3.0");
@@ -36462,7 +37072,7 @@ define('layer/RestTiledImageLayer',[
         var RestTiledImageLayer = function (serverAddress, pathToData, displayName, configuration) {
             var cachePath = WWUtil.urlPath(serverAddress + "/" + pathToData);
 
-            TiledImageLayer.call(this,
+            TiledImageLayer.call(this, displayName,
                 (configuration && configuration.sector) || Sector.FULL_SPHERE,
                 (configuration && configuration.levelZeroTileDelta) || new Location(45, 45),
                 (configuration && configuration.numLevels) || 5,
@@ -36471,8 +37081,6 @@ define('layer/RestTiledImageLayer',[
                 (configuration && configuration.tileWidth) || 256,
                 (configuration && configuration.tileHeight) || 256);
 
-            this.displayName = displayName;
-            this.pickEnabled = false;
             this.urlBuilder = new LevelRowColumnUrlBuilder(serverAddress, pathToData);
         };
 
@@ -39040,7 +39648,7 @@ define('shapes/Compass',[
          * @constructor
          * @augments ScreenImage
          * @classdesc Displays a compass image at a specified location in the WorldWindow. The compass image rotates
-         * and tilts to reflect the current navigator's heading and tilt.
+         * and tilts to reflect the current camera's heading and tilt.
          * @param {Offset} screenOffset The offset indicating the image's placement on the screen. If null or undefined
          * the compass is placed at the upper-right corner of the WorldWindow.
          * Use [the image offset property]{@link ScreenImage#imageOffset} to position the image relative to the
@@ -39073,13 +39681,13 @@ define('shapes/Compass',[
         Compass.prototype = Object.create(ScreenImage.prototype);
 
         /**
-         * Capture the navigator's heading and tilt and apply it to the compass' screen image.
+         * Capture the camera's heading and tilt and apply it to the compass' screen image.
          * @param {DrawContext} dc The current draw context.
          */
         Compass.prototype.render = function (dc) {
-            // Capture the navigator's heading and tilt and apply it to the compass' screen image.
-            this.imageRotation = dc.navigator.heading;
-            this.imageTilt = dc.navigator.tilt;
+            // Capture the camera's heading and tilt and apply it to the compass' screen image.
+            this.imageRotation = dc.camera.heading;
+            this.imageTilt = dc.camera.tilt;
 
             var t = this.getActiveTexture(dc);
             if (t) {
@@ -40168,20 +40776,14 @@ define('util/Date',[], function () {
  * @exports DigitalGlobeTiledImageLayer
  */
 define('layer/DigitalGlobeTiledImageLayer',[
-        '../geom/Angle',
         '../error/ArgumentError',
         '../util/Color',
-        '../geom/Location',
         '../util/Logger',
-        '../geom/Sector',
         '../layer/MercatorTiledImageLayer'
     ],
-    function (Angle,
-              ArgumentError,
+    function (ArgumentError,
               Color,
-              Location,
               Logger,
-              Sector,
               MercatorTiledImageLayer) {
         "use strict";
 
@@ -40212,12 +40814,7 @@ define('layer/DigitalGlobeTiledImageLayer',[
                         "The access token is null or undefined."));
             }
 
-            this.imageSize = 256;
-            displayName = displayName || "Digital Globe";
-
-            MercatorTiledImageLayer.call(this,
-                new Sector(-85.05, 85.05, -180, 180), new Location(85.05, 180), 19, "image/jpeg", displayName,
-                this.imageSize, this.imageSize);
+            MercatorTiledImageLayer.call(this, displayName || "Digital Globe", 19, "image/jpeg", displayName, 256, 1);
 
             /**
              * The map ID identifying the dataset displayed by this layer.
@@ -40233,7 +40830,6 @@ define('layer/DigitalGlobeTiledImageLayer',[
             this.accessToken = accessToken;
             //"pk.eyJ1IjoiZGlnaXRhbGdsb2JlIiwiYSI6IjljZjQwNmEyMTNhOWUyMWM5NWUzYWIwOGNhYTY2ZDViIn0.Ju3tOUUUc0C_gcCSAVpFIA";
 
-            this.displayName = displayName;
             // TODO: Picking is enabled as a temporary measure for screen credit hyperlinks to work (see Layer.render)
             this.pickEnabled = true;
 
@@ -40293,21 +40889,6 @@ define('layer/DigitalGlobeTiledImageLayer',[
             if (this.inCurrentFrame) {
                 dc.screenCreditController.addCredit("\u00A9 Digital Globe", Color.DARK_GRAY);
             }
-        };
-
-        // Overridden from TiledImageLayer.
-        DigitalGlobeTiledImageLayer.prototype.createTopLevelTiles = function (dc) {
-            this.topLevelTiles = [];
-
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 0, 0));
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 0, 1));
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 1, 0));
-            this.topLevelTiles.push(this.createTile(null, this.levels.firstLevel(), 1, 1));
-        };
-
-        // Determines the Bing map size for a specified level number.
-        DigitalGlobeTiledImageLayer.prototype.mapSizeForLevel = function (levelNumber) {
-            return 256 << (levelNumber + 1);
         };
 
         return DigitalGlobeTiledImageLayer;
@@ -47668,6 +48249,21 @@ define('shapes/SurfaceShapeTile',[
                 shape.renderToTexture(dc, ctx2D, xScale, yScale, xOffset, yOffset);
             }
 
+            // Remove semi-transparent pixels, which may contain wrong pick color due to anti-aliasing
+            // TODO Disable anti-aliasing of canvas stroke in renderToTexture instead of this hack, when it will be supported by browsers
+            if (dc.pickingMode) {
+                var imageData = ctx2D.getImageData(0, 0, canvas.width, canvas.height);
+                for (var i = 3, n = canvas.width * canvas.height * 4; i < n; i += 4) {
+                    if (imageData.data[i] < 255) {
+                        imageData.data[i - 3] = 0;
+                        imageData.data[i - 2] = 0;
+                        imageData.data[i - 1] = 0;
+                        imageData.data[i] = 0;
+                    }
+                }
+                ctx2D.putImageData(imageData, 0, 0);
+            }
+
             this.gpuCacheKey = this.getCacheKey();
 
             var gpuResourceCache = dc.gpuResourceCache;
@@ -49390,8 +49986,21 @@ define('render/DrawContext',[
             // Intentionally not documented.
             this.pixelScale = 1;
 
-            // TODO: replace with camera in the next phase of navigator refactoring
+            /**
+             * The deprecated navigator that can be used to manipulate the globe. See the {@link Camera} and {@link LookAt}
+             * classes for replacement functionality.
+             * @deprecated
+             * @type {LookAtNavigator}
+             * @default [LookAtNavigator]{@link LookAtNavigator}
+             */
             this.navigator = null;
+
+            /**
+             * The viewing point as a camera.
+             * @type {Camera}
+             * @readonly
+             */
+            this.camera = null;
 
             /**
              * The model-view matrix. The model-view matrix transforms points from model coordinates to eye
@@ -49445,9 +50054,6 @@ define('render/DrawContext',[
             this.pixelSizeFactor = 0;
 
             // Intentionally not documented.
-            this.pixelSizeOffset = 0;
-
-            // Intentionally not documented.
             this.glExtensionsCache = {};
         };
 
@@ -49485,6 +50091,7 @@ define('render/DrawContext',[
             this.verticalExaggeration = 1;
             this.frameStatistics = null;
             this.accumulateOrderedRenderables = true;
+            this.pixelSizeFactor = 0;
 
             // Reset picking properties that may be set by the WorldWindow.
             this.pickingMode = false;
@@ -50536,18 +51143,13 @@ define('render/DrawContext',[
          * coordinates per pixel.
          */
         DrawContext.prototype.pixelSizeAtDistance = function (distance) {
-            // Compute the pixel size from the width of a rectangle carved out of the frustum in model coordinates at
-            // the specified distance along the -Z axis and the viewport width in screen coordinates. The pixel size is
-            // expressed in model coordinates per screen coordinate (e.g. meters per pixel).
-            //
-            // The frustum width is determined by noticing that the frustum size is a linear function of distance from
-            // the eye point. The linear equation constants are determined during initialization, then solved for
-            // distance here.
-            //
-            // This considers only the frustum width by assuming that the frustum and viewport share the same aspect
-            // ratio, so that using either the frustum width or height results in the same pixel size.
+            if (this.pixelSizeFactor === 0) { // cache the scaling factor used to convert distances to pixel sizes
+                var fovyDegrees = this.camera.fieldOfView;
+                var tanfovy_2 = Math.tan(fovyDegrees * 0.5 / 180.0 * Math.PI);
+                this.pixelSizeFactor = 2 * tanfovy_2 / this.viewport.height;
+            }
 
-            return this.pixelSizeFactor * distance + this.pixelSizeOffset;
+            return distance * this.pixelSizeFactor;
         };
 
         /**
@@ -51435,7 +52037,7 @@ define('shapes/AbstractShape',[
         };
 
         /**
-         * Apply the current navigator's model-view-projection matrix.
+         * Apply the current camera's model-view-projection matrix.
          * @param {DrawContext} dc The current draw context.
          * @protected
          */
@@ -51446,7 +52048,7 @@ define('shapes/AbstractShape',[
         };
 
         /**
-         * Apply the current navigator's model-view-projection matrix with an offset to make this shape's outline
+         * Apply the current camera's model-view-projection matrix with an offset to make this shape's outline
          * stand out.
          * @param {DrawContext} dc The current draw context.
          * @protected
@@ -55091,13 +55693,7 @@ define('shapes/Placemark',[
          * cannot be created or should not be created at the time this method is called.
          */
         Placemark.prototype.makeOrderedRenderable = function (dc) {
-            var w, h, s,
-                offset;
-
-            this.determineActiveAttributes(dc);
-            if (!this.activeAttributes) {
-                return null;
-            }
+            var w, h, s, offset;
 
             // Compute the placemark's model point and corresponding distance to the eye point. If the placemark's
             // position is terrain-dependent but off the terrain, then compute it ABSOLUTE so that we have a point for
@@ -55108,6 +55704,14 @@ define('shapes/Placemark',[
                 this.altitudeMode, this.placePoint);
 
             this.eyeDistance = this.alwaysOnTop ? 0 : dc.eyePoint.distanceTo(this.placePoint);
+
+            // Extension point to override placemark attributes depending on camera distance
+            this.selectLevelOfDetail(dc, this, this.eyeDistance);
+
+            this.determineActiveAttributes(dc);
+            if (!this.activeAttributes) {
+                return null;
+            }
 
             if (this.mustDrawLeaderLine(dc)) {
                 dc.surfacePointForMode(this.position.latitude, this.position.longitude, 0,
@@ -55178,6 +55782,17 @@ define('shapes/Placemark',[
             }
 
             return this;
+        };
+
+        /**
+         * Set the placemark attributes for the current distance to the camera and highlighted state.
+         *
+         * @param {DrawContext} dc The current render context
+         * @param {Placemark} placemark The placemark needing a level of detail selection
+         * @param {Number} cameraDistance The distance from the placemark to the camera (meters)
+         */
+        Placemark.prototype.selectLevelOfDetail = function (dc, placemark, cameraDistance) {
+            // Intentionally empty. Can be override in application if required.
         };
 
         // Internal. Intentionally not documented.
@@ -55379,7 +55994,7 @@ define('shapes/Placemark',[
             Placemark.matrix.multiplyMatrix(this.imageTransform);
 
             var actualRotation = this.imageRotationReference === WorldWind.RELATIVE_TO_GLOBE ?
-                dc.navigator.heading - this.imageRotation : -this.imageRotation;
+                dc.camera.heading - this.imageRotation : -this.imageRotation;
             Placemark.matrix.multiplyByTranslation(0.5, 0.5, 0);
             Placemark.matrix.multiplyByRotation(0, 0, 1, actualRotation);
             Placemark.matrix.multiplyByTranslation(-0.5, -0.5, 0);
@@ -55387,7 +56002,7 @@ define('shapes/Placemark',[
             // Perform the tilt before applying the rotation so that the image tilts back from its base into
             // the view volume.
             var actualTilt = this.imageTiltReference === WorldWind.RELATIVE_TO_GLOBE ?
-                dc.navigator.tilt + this.imageTilt : this.imageTilt;
+                dc.camera.tilt + this.imageTilt : this.imageTilt;
             Placemark.matrix.multiplyByRotation(-1, 0, 0, actualTilt);
 
             program.loadModelviewProjection(gl, Placemark.matrix);
@@ -55484,6 +56099,7 @@ define('shapes/Placemark',[
 
         return Placemark;
     });
+
 /*
  * Copyright 2003-2006, 2009, 2017, United States Government, as represented by the Administrator of the
  * National Aeronautics and Space Administration. All rights reserved.
@@ -57904,11 +58520,13 @@ define('globe/Globe2D',['../globe/ElevationModel',
 define('util/GoToAnimator',[
         '../geom/Location',
         '../util/Logger',
+        '../geom/LookAt',
         '../geom/Position',
         '../geom/Vec3'
     ],
     function (Location,
               Logger,
+              LookAt,
               Position,
               Vec3) {
         "use strict";
@@ -57916,7 +58534,7 @@ define('util/GoToAnimator',[
          * Constructs a GoTo animator.
          * @alias GoToAnimator
          * @constructor
-         * @classdesc Incrementally and smoothly moves a {@link Navigator} to a specified position.
+         * @classdesc Incrementally and smoothly moves the {@link Camera} to a specified position.
          * @param {WorldWindow} worldWindow The WorldWindow in which to perform the animation.
          * @throws {ArgumentError} If the specified WorldWindow is null or undefined.
          */
@@ -57957,6 +58575,14 @@ define('util/GoToAnimator',[
              * @readonly
              */
             this.cancelled = false;
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold the current view as a look at during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.lookAt = new LookAt();
         };
 
         // Stop the current animation.
@@ -57965,10 +58591,10 @@ define('util/GoToAnimator',[
         };
 
         /**
-         * Moves the navigator to a specified location or position.
-         * @param {Location | Position} position The location or position to move the navigator to. If this
+         * Moves the camera to a specified look at location or position.
+         * @param {Location | Position} position The location or position to move the camera to. If this
          * argument contains an "altitude" property, as {@link Position} does, the end point of the navigation is
-         * at the specified altitude. Otherwise the end point is at the current altitude of the navigator.
+         * at the specified altitude. Otherwise the end point is at the current altitude of the camera.
          * @param {Function} completionCallback If not null or undefined, specifies a function to call when the
          * animation completes. The completion callback is called with a single argument, this animator.
          * @throws {ArgumentError} If the specified location or position is null or undefined.
@@ -57984,15 +58610,16 @@ define('util/GoToAnimator',[
             // Reset the cancellation flag.
             this.cancelled = false;
 
+            this.wwd.camera.getAsLookAt(this.lookAt);
             // Capture the target position and determine its altitude.
             this.targetPosition = new Position(position.latitude, position.longitude,
-                position.altitude || this.wwd.navigator.range);
+                position.altitude || this.lookAt.range);
 
             // Capture the start position and start time.
             this.startPosition = new Position(
-                this.wwd.navigator.lookAtLocation.latitude,
-                this.wwd.navigator.lookAtLocation.longitude,
-                this.wwd.navigator.range);
+                this.lookAt.position.latitude,
+                this.lookAt.position.longitude,
+                this.lookAt.range);
             this.startTime = Date.now();
 
             // Determination of the pan and range velocities requires the distance to be travelled.
@@ -58022,7 +58649,7 @@ define('util/GoToAnimator',[
             // We need to capture the time the max altitude is reached in order to begin decreasing the range
             // midway through the animation. If we're already above the max altitude, then that time is now since
             // we don't back out if the current altitude is above the computed max altitude.
-            this.maxAltitudeReachedTime = this.maxAltitude <= this.wwd.navigator.range ? Date.now() : null;
+            this.maxAltitudeReachedTime = this.maxAltitude <= this.lookAt.range ? Date.now() : null;
 
             // Compute the total range to travel since we need that to compute the range velocity.
             // Note that the range velocity and pan velocity are computed so that the respective animations, which
@@ -58079,9 +58706,9 @@ define('util/GoToAnimator',[
             // This is the timer callback function. It invokes the range animator and the pan animator.
 
             var currentPosition = new Position(
-                this.wwd.navigator.lookAtLocation.latitude,
-                this.wwd.navigator.lookAtLocation.longitude,
-                this.wwd.navigator.range);
+                this.lookAt.position.latitude,
+                this.lookAt.position.longitude,
+                this.lookAt.range);
 
             var continueAnimation = this.updateRange(currentPosition);
             continueAnimation = this.updateLocation(currentPosition) || continueAnimation;
@@ -58103,10 +58730,10 @@ define('util/GoToAnimator',[
                 elapsedTime = Date.now() - this.startTime;
                 nextRange = Math.min(this.startPosition.altitude + this.rangeVelocity * elapsedTime, this.maxAltitude);
                 // We're done if we get withing 1 meter of the desired range.
-                if (Math.abs(this.wwd.navigator.range - nextRange) < 1) {
+                if (Math.abs(this.lookAt.range - nextRange) < 1) {
                     this.maxAltitudeReachedTime = Date.now();
                 }
-                this.wwd.navigator.range = nextRange;
+                this.lookAt.range = nextRange;
                 continueAnimation = true;
             } else {
                 elapsedTime = Date.now() - this.maxAltitudeReachedTime;
@@ -58117,10 +58744,12 @@ define('util/GoToAnimator',[
                     nextRange = this.maxAltitude + (this.rangeVelocity * elapsedTime);
                     nextRange = Math.min(nextRange, this.targetPosition.altitude);
                 }
-                this.wwd.navigator.range = nextRange;
+                this.lookAt.range = nextRange;
                 // We're done if we get withing 1 meter of the desired range.
-                continueAnimation = Math.abs(this.wwd.navigator.range - this.targetPosition.altitude) > 1;
+                continueAnimation = Math.abs(this.lookAt.range - this.targetPosition.altitude) > 1;
             }
+
+            this.wwd.camera.setFromLookAt(this.lookAt);
 
             return continueAnimation;
         };
@@ -58138,8 +58767,9 @@ define('util/GoToAnimator',[
                     new Location(0, 0)),
                 locationReached = false;
 
-            this.wwd.navigator.lookAtLocation.latitude = nextLocation.latitude;
-            this.wwd.navigator.lookAtLocation.longitude = nextLocation.longitude;
+            this.lookAt.position.latitude = nextLocation.latitude;
+            this.lookAt.position.longitude = nextLocation.longitude;
+            this.wwd.camera.setFromLookAt(this.lookAt);
 
             // We're done if we're within a meter of the desired location.
             if (nextDistance < 1 / this.wwd.globe.equatorialRadius) {
@@ -58654,9 +59284,7 @@ define('layer/heatmap/HeatMapLayer',[
         this.tileWidth = 256;
         this.tileHeight = 256;
 
-        TiledImageLayer.call(this, new Sector(-90, 90, -180, 180), new Location(45, 45), 18, 'image/png', 'HeatMap' + WWUtil.guid(), this.tileWidth, this.tileHeight);
-
-        this.displayName = displayName;
+        TiledImageLayer.call(this, displayName, new Sector(-90, 90, -180, 180), new Location(45, 45), 18, 'image/png', 'HeatMap' + WWUtil.guid(), this.tileWidth, this.tileHeight);
 
         var data = {};
         for (var lat = -90; lat <= 90; lat++) {
@@ -69051,10 +69679,8 @@ define('layer/LandsatRestLayer',[
         var LandsatRestLayer = function (serverAddress, pathToData, displayName) {
             var cachePath = WWUtil.urlPath(serverAddress + "/" + pathToData);
 
-            TiledImageLayer.call(this, Sector.FULL_SPHERE, new Location(36, 36), 10, "image/png", cachePath, 512, 512);
+            TiledImageLayer.call(this, displayName, Sector.FULL_SPHERE, new Location(36, 36), 10, "image/png", cachePath, 512, 512);
 
-            this.displayName = displayName;
-            this.pickEnabled = false;
             this.urlBuilder = new LevelRowColumnUrlBuilder(serverAddress, pathToData);
         };
 
@@ -69290,6 +69916,76 @@ define('util/measure/LengthMeasurer',[
 
     });
 /*
+ * Copyright 2015-2017 WorldWind Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+/**
+ * @exports LookAtPositionProxy
+ */
+define('navigate/LookAtPositionProxy',[
+        '../geom/Position'
+    ],
+    function (Position) {
+        "use strict";
+
+        /**
+         * Constructs a look-at position proxy
+         * @deprecated
+         * @alias LookAtPositionProxy
+         * @constructor
+         * @classdesc A Position proxy class that is used for backward compatibility purposes by the deprecated LookAtNavigator class.
+         */
+        var LookAtPositionProxy = function (navigator) {
+            this.position = new Position(0, 0, 0);
+            this.lookAtNavigator = navigator;
+        };
+
+        Object.defineProperties(LookAtPositionProxy.prototype, {
+            latitude: {
+                get: function () {
+                    return this.position.latitude;
+                },
+                set: function (value) {
+                    this.position.latitude = value;
+                    this.lookAtNavigator.lookAtLocation = this.position;
+                }
+            },
+
+            longitude: {
+                get: function () {
+                    return this.position.longitude;
+                },
+                set: function (value) {
+                    this.position.longitude = value;
+                    this.lookAtNavigator.lookAtLocation = this.position;
+                }
+            },
+
+            altitude: {
+                get: function () {
+                    return this.position.altitude;
+                },
+                set: function (value) {
+                    this.position.altitude = value;
+                    this.lookAtNavigator.lookAtLocation = this.position;
+                }
+            }
+        });
+
+        return LookAtPositionProxy;
+    });
+/*
  * Copyright 2003-2006, 2009, 2017, United States Government, as represented by the Administrator of the
  * National Aeronautics and Space Administration. All rights reserved.
  *
@@ -69308,39 +70004,90 @@ define('util/measure/LengthMeasurer',[
 /**
  * @exports Navigator
  */
-define('navigate/Navigator',[],
-    function () {
+define('navigate/Navigator',['../error/ArgumentError',
+        '../util/Logger',
+        '../geom/LookAt'
+    ],
+    function (ArgumentError,
+              Logger,
+              LookAt) {
         "use strict";
 
         /**
          * Constructs a base navigator.
+         * @deprecated
          * @alias Navigator
          * @constructor
          * @classdesc Provides an abstract base class for navigators. This class is not meant to be instantiated
-         * directly. See {@Link LookAtNavigator} for a concrete navigator.
+         * directly. Deprecated, see  {@Link Camera}.
+         * @param {WorldWindow} worldWindow The WorldWindow to associate with this navigator.
          */
-        var Navigator = function () {
+        var Navigator = function (worldWindow) {
+            if (!worldWindow) {
+                throw new ArgumentError(
+                    Logger.logMessage(Logger.LEVEL_SEVERE, "Navigator", "constructor", "missingWorldWindow"));
+            }
+
+            this.wwd = worldWindow;
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold the look view during calculations. Using an object level temp property
+             * negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchLookAt = new LookAt();
+        };
+
+        Object.defineProperties(Navigator.prototype, {
             /**
              * This navigator's heading, in degrees clockwise from north.
              * @type {Number}
              * @default 0
              */
-            this.heading = 0;
+            heading: {
+                get: function () {
+                    return this.wwd.camera.getAsLookAt(this.scratchLookAt).heading;
+                },
+                set: function (value) {
+                    var lookAt = this.wwd.camera.getAsLookAt(this.scratchLookAt);
+                    lookAt.heading = value;
+                    this.wwd.camera.setFromLookAt(lookAt);
+                }
+            },
 
             /**
              * This navigator's tilt, in degrees.
              * @type {Number}
              * @default 0
              */
-            this.tilt = 0;
+            tilt: {
+                get: function () {
+                    return this.wwd.camera.getAsLookAt(this.scratchLookAt).tilt;
+                },
+                set: function (value) {
+                    var lookAt = this.wwd.camera.getAsLookAt(this.scratchLookAt);
+                    lookAt.tilt = value;
+                    this.wwd.camera.setFromLookAt(lookAt);
+                }
+            },
 
             /**
              * This navigator's roll, in degrees.
              * @type {Number}
              * @default 0
              */
-            this.roll = 0;
-        };
+            roll: {
+                get: function () {
+                    return this.wwd.camera.getAsLookAt(this.scratchLookAt).roll;
+                },
+                set: function (value) {
+                    var lookAt = this.wwd.camera.getAsLookAt(this.scratchLookAt);
+                    lookAt.roll = value;
+                    this.wwd.camera.setFromLookAt(lookAt);
+                }
+            }
+        });
 
         return Navigator;
     });
@@ -69365,41 +70112,81 @@ define('navigate/Navigator',[],
  */
 define('navigate/LookAtNavigator',[
         '../geom/Location',
-        '../navigate/Navigator',
+        '../geom/LookAt',
+        '../navigate/LookAtPositionProxy',
+        '../navigate/Navigator'
     ],
     function (Location,
+              LookAt,
+              LookAtPositionProxy,
               Navigator) {
         "use strict";
 
         /**
          * Constructs a look-at navigator.
+         * @deprecated
          * @alias LookAtNavigator
          * @constructor
          * @augments Navigator
          * @classdesc Represents a navigator containing the required variables to enable the user to pan, zoom and tilt
-         * the globe.
+         * the globe. Deprecated, see {@Link LookAt}.
          */
-        var LookAtNavigator = function () {
-            Navigator.call(this);
+        var LookAtNavigator = function (worldWindow) {
+            Navigator.call(this, worldWindow);
 
+
+            /**
+             * Internal use only.
+             * A temp variable used to hold the position during calculations and property retrieval. Using an object
+             * level temp property negates the need for ad-hoc allocations and reduces load on the garbage collector.
+             * @ignore
+             */
+            this.scratchLookAtPositionProxy = new LookAtPositionProxy(this);
+        };
+
+        LookAtNavigator.prototype = Object.create(Navigator.prototype);
+
+        Object.defineProperties(LookAtNavigator.prototype, {
             /**
              * The geographic location at the center of the viewport.
              * @type {Location}
              */
-            this.lookAtLocation = new Location(30, -110);
+            lookAtLocation: {
+                get: function () {
+                    this.wwd.camera.getAsLookAt(this.scratchLookAt);
+                    this.scratchLookAtPositionProxy.position.copy(this.scratchLookAt.position);
+                    return this.scratchLookAtPositionProxy;
+                },
+                set: function (value) {
+                    var lookAt = this.wwd.camera.getAsLookAt(this.scratchLookAt);
+                    lookAt.position.latitude = value.latitude;
+                    lookAt.position.longitude = value.longitude;
+                    if (value.altitude) {
+                        lookAt.position.altitude = value.altitude;
+                    }
+                    else {
+                        lookAt.position.altitude = 0;
+                    }
+                    this.wwd.camera.setFromLookAt(lookAt);
+                }
+            },
 
             /**
              * The distance from this navigator's eye point to its look-at location.
              * @type {Number}
              * @default 10,000 kilometers
              */
-            this.range = 10e6; // TODO: Compute initial range to fit globe in viewport.
-
-            // Development testing only. Set this to false to suppress default navigator limits on 2D globes.
-            this.enable2DLimits = true;
-        };
-
-        LookAtNavigator.prototype = Object.create(Navigator.prototype);
+            range: {
+                get: function () {
+                    return this.wwd.camera.getAsLookAt(this.scratchLookAt).range;
+                },
+                set: function (value) {
+                    var lookAt = this.wwd.camera.getAsLookAt(this.scratchLookAt);
+                    lookAt.range = value;
+                    this.wwd.camera.setFromLookAt(lookAt);
+                }
+            }
+        });
 
         return LookAtNavigator;
     });
@@ -82906,6 +83693,7 @@ define('layer/ViewControlsLayer',[
         '../layer/Layer',
         '../geom/Location',
         '../util/Logger',
+        '../geom/LookAt',
         '../util/Offset',
         '../shapes/ScreenImage',
         '../geom/Vec2'
@@ -82915,6 +83703,7 @@ define('layer/ViewControlsLayer',[
               Layer,
               Location,
               Logger,
+              LookAt,
               Offset,
               ScreenImage,
               Vec2) {
@@ -83034,9 +83823,9 @@ define('layer/ViewControlsLayer',[
             /**
              * The incremental amount to narrow or widen the field of view each cycle, in degrees.
              * @type {Number}
-             * @default 0.1
+             * @default 0.5
              */
-            this.fieldOfViewIncrement = 0.1;
+            this.fieldOfViewIncrement = 0.5;
 
             /**
              * The scale factor governing the pan speed. Increased values cause faster panning.
@@ -83104,6 +83893,13 @@ define('layer/ViewControlsLayer',[
 
             // Establish event handlers.
             this.wwd.worldWindowController.addGestureListener(this);
+
+            /**
+             * Internal use only.
+             * The current state of the viewing parameters during an operation as a look at view.
+             * @ignore
+             */
+            this.lookAt = new LookAt();
         };
 
         ViewControlsLayer.prototype = Object.create(Layer.prototype);
@@ -83433,9 +84229,11 @@ define('layer/ViewControlsLayer',[
                 this.activeOperation = null;
                 e.preventDefault();
             } else {
+                var requestRedraw = false;
                 // Perform the active operation, or determine it and then perform it.
                 if (this.activeOperation) {
                     handled = this.activeOperation.call(this, e, null);
+                    requestRedraw = true;
                     e.preventDefault();
                 } else {
                     topObject = this.pickControl(e);
@@ -83443,13 +84241,16 @@ define('layer/ViewControlsLayer',[
                         var operation = this.determineOperation(e, topObject);
                         if (operation) {
                             handled = operation.call(this, e, topObject);
+                            requestRedraw = true;
                         }
                     }
                 }
 
                 // Determine and display the new highlight state.
-                this.handleHighlight(e, topObject);
-                this.wwd.redraw();
+                var highlighted = this.handleHighlight(e, topObject);
+                if (requestRedraw || highlighted) {
+                    this.wwd.redraw();
+                }
             }
 
             return handled;
@@ -83555,6 +84356,7 @@ define('layer/ViewControlsLayer',[
             if (this.isPointerDown(e) || this.isTouchStart(e)) {
                 this.activeControl = control;
                 this.activeOperation = this.handlePan;
+                this.wwd.camera.getAsLookAt(this.lookAt);
                 e.preventDefault();
 
                 if (this.isTouchStart(e)) {
@@ -83568,16 +84370,18 @@ define('layer/ViewControlsLayer',[
                         var dx = thisLayer.panControlCenter[0] - thisLayer.currentEventPoint[0],
                             dy = thisLayer.panControlCenter[1]
                                 - (thisLayer.wwd.viewport.height - thisLayer.currentEventPoint[1]),
-                            oldLat = thisLayer.wwd.navigator.lookAtLocation.latitude,
-                            oldLon = thisLayer.wwd.navigator.lookAtLocation.longitude,
+                            lookAt = thisLayer.lookAt,
+                            oldLat = lookAt.position.latitude,
+                            oldLon = lookAt.position.longitude,
                             // Scale the increment by a constant and the relative distance of the eye to the surface.
                             scale = thisLayer.panIncrement
-                                * (thisLayer.wwd.navigator.range / thisLayer.wwd.globe.radiusAt(oldLat, oldLon)),
-                            heading = thisLayer.wwd.navigator.heading + (Math.atan2(dx, dy) * Angle.RADIANS_TO_DEGREES),
+                                * (lookAt.range / thisLayer.wwd.globe.radiusAt(oldLat, oldLon)),
+                            heading = lookAt.heading + (Math.atan2(dx, dy) * Angle.RADIANS_TO_DEGREES),
                             distance = scale * Math.sqrt(dx * dx + dy * dy);
 
-                        Location.greatCircleLocation(thisLayer.wwd.navigator.lookAtLocation, heading, -distance,
-                            thisLayer.wwd.navigator.lookAtLocation);
+                        Location.greatCircleLocation(lookAt.position, heading, -distance,
+                            lookAt.position);
+                        thisLayer.wwd.camera.setFromLookAt(lookAt);
                         thisLayer.wwd.redraw();
                         setTimeout(setLookAtLocation, 50);
                     }
@@ -83598,6 +84402,7 @@ define('layer/ViewControlsLayer',[
             if (this.isPointerDown(e) || this.isTouchStart(e)) {
                 this.activeControl = control;
                 this.activeOperation = this.handleZoom;
+                this.wwd.camera.getAsLookAt(this.lookAt);
                 e.preventDefault();
 
                 if (this.isTouchStart(e)) {
@@ -83608,11 +84413,13 @@ define('layer/ViewControlsLayer',[
                 var thisLayer = this; // capture 'this' for use in the function
                 var setRange = function () {
                     if (thisLayer.activeControl) {
+                        var lookAt = thisLayer.lookAt;
                         if (thisLayer.activeControl === thisLayer.zoomInControl) {
-                            thisLayer.wwd.navigator.range *= (1 - thisLayer.zoomIncrement);
+                            lookAt.range *= (1 - thisLayer.zoomIncrement);
                         } else if (thisLayer.activeControl === thisLayer.zoomOutControl) {
-                            thisLayer.wwd.navigator.range *= (1 + thisLayer.zoomIncrement);
+                            lookAt.range *= (1 + thisLayer.zoomIncrement);
                         }
+                        thisLayer.wwd.camera.setFromLookAt(lookAt);
                         thisLayer.wwd.redraw();
                         setTimeout(setRange, 50);
                     }
@@ -83633,6 +84440,7 @@ define('layer/ViewControlsLayer',[
             if (this.isPointerDown(e) || this.isTouchStart(e)) {
                 this.activeControl = control;
                 this.activeOperation = this.handleHeading;
+                this.wwd.camera.getAsLookAt(this.lookAt);
                 e.preventDefault();
 
                 if (this.isTouchStart(e)) {
@@ -83641,18 +84449,20 @@ define('layer/ViewControlsLayer',[
 
                 // This function is called by the timer to perform the operation.
                 var thisLayer = this; // capture 'this' for use in the function
-                var setRange = function () {
+                var setHeading = function () {
+                    var lookAt = thisLayer.lookAt;
                     if (thisLayer.activeControl) {
                         if (thisLayer.activeControl === thisLayer.headingLeftControl) {
-                            thisLayer.wwd.navigator.heading += thisLayer.headingIncrement;
+                            lookAt.heading += thisLayer.headingIncrement;
                         } else if (thisLayer.activeControl === thisLayer.headingRightControl) {
-                            thisLayer.wwd.navigator.heading -= thisLayer.headingIncrement;
+                            lookAt.heading -= thisLayer.headingIncrement;
                         }
+                        thisLayer.wwd.camera.setFromLookAt(lookAt);
                         thisLayer.wwd.redraw();
-                        setTimeout(setRange, 50);
+                        setTimeout(setHeading, 50);
                     }
                 };
-                setTimeout(setRange, 50);
+                setTimeout(setHeading, 50);
                 handled = true;
             }
 
@@ -83667,6 +84477,7 @@ define('layer/ViewControlsLayer',[
             if (this.isPointerDown(e) || this.isTouchStart(e)) {
                 this.activeControl = control;
                 this.activeOperation = this.handleTilt;
+                this.wwd.camera.getAsLookAt(this.lookAt);
                 e.preventDefault();
 
                 if (this.isTouchStart(e)) {
@@ -83675,20 +84486,22 @@ define('layer/ViewControlsLayer',[
 
                 // This function is called by the timer to perform the operation.
                 var thisLayer = this; // capture 'this' for use in the function
-                var setRange = function () {
+                var setTilt = function () {
                     if (thisLayer.activeControl) {
+                        var lookAt = thisLayer.lookAt;
                         if (thisLayer.activeControl === thisLayer.tiltUpControl) {
-                            thisLayer.wwd.navigator.tilt =
-                                Math.max(0, thisLayer.wwd.navigator.tilt - thisLayer.tiltIncrement);
+                            lookAt.tilt =
+                                Math.max(0, lookAt.tilt - thisLayer.tiltIncrement);
                         } else if (thisLayer.activeControl === thisLayer.tiltDownControl) {
-                            thisLayer.wwd.navigator.tilt =
-                                Math.min(90, thisLayer.wwd.navigator.tilt + thisLayer.tiltIncrement);
+                            lookAt.tilt =
+                                Math.min(90, lookAt.tilt + thisLayer.tiltIncrement);
                         }
+                        thisLayer.wwd.camera.setFromLookAt(lookAt);
                         thisLayer.wwd.redraw();
-                        setTimeout(setRange, 50);
+                        setTimeout(setTilt, 50);
                     }
                 };
-                setTimeout(setRange, 50);
+                setTimeout(setTilt, 50);
 
                 handled = true;
             }
@@ -83748,20 +84561,20 @@ define('layer/ViewControlsLayer',[
 
                 // This function is called by the timer to perform the operation.
                 var thisLayer = this; // capture 'this' for use in the function
-                var setRange = function () {
+                var setFov = function () {
                     if (thisLayer.activeControl) {
                         if (thisLayer.activeControl === thisLayer.fovWideControl) {
-                            thisLayer.wwd.navigator.fieldOfView =
-                                Math.max(90, thisLayer.wwd.navigator.fieldOfView + thisLayer.fieldOfViewIncrement);
+                            thisLayer.wwd.camera.fieldOfView =
+                                Math.min(90, thisLayer.wwd.camera.fieldOfView + thisLayer.fieldOfViewIncrement);
                         } else if (thisLayer.activeControl === thisLayer.fovNarrowControl) {
-                            thisLayer.wwd.navigator.fieldOfView =
-                                Math.min(0, thisLayer.wwd.navigator.fieldOfView - thisLayer.fieldOfViewIncrement);
+                            thisLayer.wwd.camera.fieldOfView =
+                                Math.max(0, thisLayer.wwd.camera.fieldOfView - thisLayer.fieldOfViewIncrement);
                         }
                         thisLayer.wwd.redraw();
-                        setTimeout(setRange, 50);
+                        setTimeout(setFov, 50);
                     }
                 };
-                setTimeout(setRange, 50);
+                setTimeout(setFov, 50);
                 handled = true;
             }
 
@@ -83773,10 +84586,14 @@ define('layer/ViewControlsLayer',[
             if (this.activeControl) {
                 // Highlight the active control.
                 this.highlight(this.activeControl, true);
+                return true;
             } else if (topObject && this.isControl(topObject)) {
                 // Highlight the control under the cursor or finger.
                 this.highlight(topObject, true);
+                return true;
             }
+
+            return false;
         };
 
         // Intentionally not documented. Sets the highlight state of a control.
@@ -88329,11 +89146,8 @@ define('layer/WmsLayer',[
                 cachePath = cachePath + timeString;
             }
 
-            TiledImageLayer.call(this, config.sector, config.levelZeroDelta, config.numLevels, config.format,
+            TiledImageLayer.call(this, config.title, config.sector, config.levelZeroDelta, config.numLevels, config.format,
                 cachePath, config.size, config.size);
-
-            this.displayName = config.title;
-            this.pickEnabled = false;
 
             this.urlBuilder = new WmsUrlBuilder(config.service, config.layerNames, config.styleNames, config.version,
                 timeString);
@@ -88566,13 +89380,14 @@ define('layer/WmsTimeDimensionedLayer',[
  * @@author Bruce Schubert
  */
 define('util/KeyboardControls',[
-    '../geom/Location'],
+    '../geom/Location',
+    '../geom/LookAt'],
     function (
-        Location) {
+        Location, LookAt) {
         "use strict";
         /**
          * Creates a KeyboardController that dispatches keystrokes from the 
-         * WorldWindow to the Navigator. Note: the WorldWindow's canvas must be focusable; 
+         * WorldWindow to the Camera. Note: the WorldWindow's canvas must be focusable;
          * this can be accomplished by establishing the "tabindex" on the canvas element.
          * @param {WorldWindow} wwd The keyboard event generator.
          * @returns {KeyboardControls}
@@ -88612,6 +89427,13 @@ define('util/KeyboardControls',[
              * @type {Number}
              */
             this.panIncrement = 0.0000000005;
+
+            /**
+             * Internal use only.
+             * The current state of the viewing parameters during an operation as a look at view.
+             * @ignore
+             */
+            this.lookAt = new LookAt();
 
         };
 
@@ -88664,7 +89486,9 @@ define('util/KeyboardControls',[
          * Reset the view to North up.
          */
         KeyboardControls.prototype.resetHeading = function () {
-            this.wwd.navigator.heading = Number(0);
+            this.wwd.camera.getAsLookAt(this.lookAt);
+            this.lookAt.heading = Number(0);
+            this.wwd.camera.setFromLookAt(this.lookAt);
             this.wwd.redraw();
         };
 
@@ -88672,17 +89496,11 @@ define('util/KeyboardControls',[
          * Reset the view to North up and nadir.
          */
         KeyboardControls.prototype.resetHeadingAndTilt = function () {
-            this.wwd.navigator.heading = 0;
-            this.wwd.navigator.tilt = 0;
-            this.wwd.redraw(); // calls applyLimits which may change the location
-
-//            // Tilting the view will change the location due to a deficiency in
-//            // the early release of WW.  So we set the location to the center of the
-//            // current crosshairs position (viewpoint) to resolve this issue
-//            var viewpoint = this.getViewpoint(),
-//                    lat = viewpoint.target.latitude,
-//                    lon = viewpoint.target.longitude;
-//            this.lookAt(lat, lon);   
+            this.wwd.camera.getAsLookAt(this.lookAt);
+            this.lookAt.heading = 0;
+            this.lookAt.tilt = 0;
+            this.wwd.camera.setFromLookAt(this.lookAt);
+            this.wwd.redraw();
         };
 
         /**
@@ -88702,16 +89520,18 @@ define('util/KeyboardControls',[
          */
         KeyboardControls.prototype.handleZoom = function (operation) {
             this.activeOperation = this.handleZoom;
+            this.wwd.camera.getAsLookAt(this.lookAt);
 
             // This function is called by the timer to perform the operation.
             var self = this, // capture 'this' for use in the function
                 setRange = function () {
                     if (self.activeOperation) {
                         if (operation === "zoomIn") {
-                            self.wwd.navigator.range *= (1 - self.zoomIncrement);
+                            self.lookAt.range *= (1 - self.zoomIncrement);
                         } else if (operation === "zoomOut") {
-                            self.wwd.navigator.range *= (1 + self.zoomIncrement);
+                            self.lookAt.range *= (1 + self.zoomIncrement);
                         }
+                        self.wwd.camera.setFromLookAt(self.lookAt);
                         self.wwd.redraw();
                         setTimeout(setRange, 50);
                     }
@@ -88725,13 +89545,14 @@ define('util/KeyboardControls',[
          */
         KeyboardControls.prototype.handlePan = function (operation) {
             this.activeOperation = this.handlePan;
+            this.wwd.camera.getAsLookAt(this.lookAt);
 
             // This function is called by the timer to perform the operation.
             var self = this, // capture 'this' for use in the function
                 setLookAtLocation = function () {
                     if (self.activeOperation) {
-                        var heading = self.wwd.navigator.heading,
-                            distance = self.panIncrement * self.wwd.navigator.range;
+                        var heading = self.lookAt.heading,
+                            distance = self.panIncrement * self.lookAt.range;
 
                         switch (operation) {
                             case 'panUp' :
@@ -88746,12 +89567,13 @@ define('util/KeyboardControls',[
                                 heading += 90;
                                 break;
                         }
-                        // Update the navigator's lookAtLocation
+                        // Update the cameras's lookAt Position
                         Location.greatCircleLocation(
-                            self.wwd.navigator.lookAtLocation,
+                            self.lookAt.position,
                             heading,
                             distance,
-                            self.wwd.navigator.lookAtLocation);
+                            self.lookAt.position);
+                        self.wwd.camera.setFromLookAt(self.lookAt);
                         self.wwd.redraw();
                         setTimeout(setLookAtLocation, 50);
                     }
@@ -88789,6 +89611,7 @@ define('util/KeyboardControls',[
 define('WorldWindow',[
         './error/ArgumentError',
         './BasicWorldWindowController',
+        './geom/Camera',
         './render/DrawContext',
         './globe/EarthElevationModel',
         './util/FrameStatistics',
@@ -88815,6 +89638,7 @@ define('WorldWindow',[
     ],
     function (ArgumentError,
               BasicWorldWindowController,
+              Camera,
               DrawContext,
               EarthElevationModel,
               FrameStatistics,
@@ -88883,7 +89707,7 @@ define('WorldWindow',[
             // Internal. Intentionally not documented.
             this.drawContext = new DrawContext(gl);
 
-            // Internal. Intentionally not documented. Must be initialized before the navigator is created.
+            // Internal. Intentionally not documented.
             this.eventListeners = {};
 
             // Internal. Intentionally not documented. Initially true in order to redraw at least once.
@@ -88897,6 +89721,9 @@ define('WorldWindow',[
 
             // Internal. Intentionally not documented.
             this.scratchProjection = Matrix.fromIdentity();
+
+            // Internal. Intentionally not documented.
+            this.scratchPoint = new Vec3(0, 0, 0);
 
             // Internal. Intentionally not documented.
             this.hasStencilBuffer = gl.getContextAttributes().stencil;
@@ -88939,11 +89766,20 @@ define('WorldWindow',[
             this.layers = [];
 
             /**
-             * The navigator used to manipulate the globe.
+             * The deprecated navigator that can be used to manipulate the globe. See the {@link Camera} and {@link LookAt}
+             * classes for replacement functionality.
+             * @deprecated
              * @type {LookAtNavigator}
              * @default [LookAtNavigator]{@link LookAtNavigator}
              */
-            this.navigator = new LookAtNavigator();
+            this.navigator = new LookAtNavigator(this);
+
+            /**
+             * The camera used to view the globe.
+             * @type {Camera}
+             * @default [Camera]{@link Camera}
+             */
+            this.camera = new Camera(this);
 
             /**
              * The controller used to manipulate the globe.
@@ -89152,13 +89988,7 @@ define('WorldWindow',[
          * arguments, see the W3C [EventTarget]{@link https://www.w3.org/TR/DOM-Level-2-Events/events.html#Events-EventTarget}
          * documentation.
          *
-         * Registering event listeners using this function enables applications to prevent the WorldWindow's default
-         * navigation behavior. To prevent default navigation behavior, call the [Event]{@link https://www.w3.org/TR/DOM-Level-2-Events/events.html#Events-Event}'s
-         * preventDefault method from within an event listener for any events the navigator should not respond to.
-         *
-         * When an event occurs, this calls the registered event listeners in order of reverse registration. Since the
-         * WorldWindow registers its navigator event listeners first, application event listeners are called before
-         * navigator event listeners.
+         * When an event occurs, this calls the registered event listeners in order of reverse registration.
          *
          * @param type The event type to listen for.
          * @param listener The function to call when the event occurs.
@@ -89457,24 +90287,18 @@ define('WorldWindow',[
                     Logger.logMessage(Logger.LEVEL_SEVERE, "WorldWindow", "computeViewingTransform", "missingModelview"));
             }
 
-            modelview.setToIdentity();
-            this.worldWindowController.applyLimits();
-            var globe = this.globe;
-            var navigator = this.navigator;
-            var lookAtPosition = new Position(navigator.lookAtLocation.latitude, navigator.lookAtLocation.longitude, 0);
-            modelview.multiplyByLookAtModelview(lookAtPosition, navigator.range, navigator.heading, navigator.tilt, navigator.roll, globe);
+            this.camera.computeViewingTransform(modelview);
 
             if (projection) {
-                projection.setToIdentity();
-                var globeRadius = WWMath.max(globe.equatorialRadius, globe.polarRadius),
-                    eyePoint = modelview.extractEyePoint(new Vec3(0, 0, 0)),
-                    eyePos = globe.computePositionFromPoint(eyePoint[0], eyePoint[1], eyePoint[2], new Position(0, 0, 0)),
+                var globeRadius = WWMath.max(this.globe.equatorialRadius, this.globe.polarRadius),
+                    eyePos = this.camera.position,
+                    fieldOfView = this.camera.fieldOfView,
                     eyeHorizon = WWMath.horizonDistanceForGlobeRadius(globeRadius, eyePos.altitude),
                     atmosphereHorizon = WWMath.horizonDistanceForGlobeRadius(globeRadius, 160000),
                     viewport = this.viewport;
 
                 // Set the far clip distance to the smallest value that does not clip the atmosphere.
-                // TODO adjust the clip plane distances based on the navigator's orientation - shorter distances when the
+                // TODO adjust the clip plane distances based on the camera's orientation - shorter distances when the
                 // TODO horizon is not in view
                 // TODO parameterize the object altitude for horizon distance
                 var farDistance = eyeHorizon + atmosphereHorizon;
@@ -89488,9 +90312,9 @@ define('WorldWindow',[
                 var nearDistance = WWMath.perspectiveNearDistanceForFarDistance(farDistance, 10, this.depthBits);
 
                 // Prevent the near clip plane from intersecting the terrain.
-                var distanceToSurface = eyePos.altitude - globe.elevationAtLocation(eyePos.latitude, eyePos.longitude);
+                var distanceToSurface = eyePos.altitude - this.globe.elevationAtLocation(eyePos.latitude, eyePos.longitude) * this.verticalExaggeration;
                 if (distanceToSurface > 0) {
-                    var maxNearDistance = WWMath.perspectiveNearDistance(viewport.width, viewport.height, distanceToSurface);
+                    var maxNearDistance = WWMath.perspectiveNearDistance(fieldOfView, distanceToSurface);
                     if (nearDistance > maxNearDistance) {
                         nearDistance = maxNearDistance;
                     }
@@ -89500,47 +90324,11 @@ define('WorldWindow',[
                     nearDistance = 1;
                 }
 
-                // Compute the current projection matrix based on this navigator's perspective properties and the current
+                // Compute the current projection matrix based on this camera's perspective properties and the current
                 // WebGL viewport.
-                projection.setToPerspectiveProjection(viewport.width, viewport.height, nearDistance, farDistance);
+                projection.setToIdentity();
+                projection.setToPerspectiveProjection(viewport.width, viewport.height, fieldOfView, nearDistance, farDistance);
             }
-        };
-
-        // Internal. Intentionally not documented.
-        WorldWindow.prototype.computePixelMetrics = function (projection) {
-            var projectionInv = Matrix.fromIdentity();
-            projectionInv.invertMatrix(projection);
-
-            // Compute the eye coordinate rectangles carved out of the frustum by the near and far clipping planes, and
-            // the distance between those planes and the eye point along the -Z axis. The rectangles are determined by
-            // transforming the bottom-left and top-right points of the frustum from clip coordinates to eye
-            // coordinates.
-            var nbl = new Vec3(-1, -1, -1),
-                ntr = new Vec3(+1, +1, -1),
-                fbl = new Vec3(-1, -1, +1),
-                ftr = new Vec3(+1, +1, +1);
-            // Convert each frustum corner from clip coordinates to eye coordinates by multiplying by the inverse
-            // projection matrix.
-            nbl.multiplyByMatrix(projectionInv);
-            ntr.multiplyByMatrix(projectionInv);
-            fbl.multiplyByMatrix(projectionInv);
-            ftr.multiplyByMatrix(projectionInv);
-
-            var nrRectWidth = WWMath.fabs(ntr[0] - nbl[0]),
-                frRectWidth = WWMath.fabs(ftr[0] - fbl[0]),
-                nrDistance = -nbl[2],
-                frDistance = -fbl[2];
-
-            // Compute the scale and offset used to determine the width of a pixel on a rectangle carved out of the
-            // frustum at a distance along the -Z axis in eye coordinates. These values are found by computing the scale
-            // and offset of a frustum rectangle at a given distance, then dividing each by the viewport width.
-            var frustumWidthScale = (frRectWidth - nrRectWidth) / (frDistance - nrDistance),
-                frustumWidthOffset = nrRectWidth - frustumWidthScale * nrDistance;
-
-            return {
-                pixelSizeFactor: frustumWidthScale / this.viewport.width,
-                pixelSizeOffset: frustumWidthOffset / this.viewport.height
-            };
         };
 
         /**
@@ -89557,9 +90345,9 @@ define('WorldWindow',[
          * coordinates per pixel.
          */
         WorldWindow.prototype.pixelSizeAtDistance = function (distance) {
-            this.computeViewingTransform(this.scratchProjection, this.scratchModelview);
-            var pixelMetrics = this.computePixelMetrics(this.scratchProjection);
-            return pixelMetrics.pixelSizeFactor * distance + pixelMetrics.pixelSizeOffset;
+            var tanfovy_2 = Math.tan(this.camera.fieldOfView * 0.5 / 180.0 * Math.PI);
+            var frustumHeight = 2 * distance * tanfovy_2;
+            return frustumHeight / this.viewport.height;
         };
 
         // Internal. Intentionally not documented.
@@ -89573,12 +90361,7 @@ define('WorldWindow',[
             dc.modelviewProjection.setToIdentity();
             dc.modelviewProjection.setToMultiply(dc.projection, dc.modelview);
 
-            var pixelMetrics = this.computePixelMetrics(dc.projection);
-            dc.pixelSizeFactor = pixelMetrics.pixelSizeFactor;
-            dc.pixelSizeOffset = pixelMetrics.pixelSizeOffset;
-
-            // Compute the inverse of the modelview, projection, and modelview-projection matrices. The inverse matrices
-            // are used to support operations on navigator state.
+            // Compute the inverse of the modelview, projection, and modelview-projection matrices.
             var modelviewInv = Matrix.fromIdentity();
             modelviewInv.invertOrthonormalMatrix(dc.modelview);
 
@@ -89604,6 +90387,7 @@ define('WorldWindow',[
             dc.reset();
             dc.globe = this.globe;
             dc.navigator = this.navigator;
+            dc.camera = this.camera;
             dc.layers = this.layers.slice();
             dc.layers.push(dc.screenCreditController);
             this.computeDrawContext();
@@ -90210,10 +90994,10 @@ define('WorldWindow',[
         };
 
         /**
-         * Moves this WorldWindow's navigator to a specified location or position.
-         * @param {Location | Position} position The location or position to move the navigator to. If this
+         * Moves this WorldWindow's camera to a specified look at location or position.
+         * @param {Location | Position} position The location or position to move the look at to. If this
          * argument contains an "altitude" property, as {@link Position} does, the end point of the navigation is
-         * at the specified altitude. Otherwise the end point is at the current altitude of the navigator.
+         * at the specified altitude. Otherwise the end point is at the current altitude of the camera.
          *
          * This function uses this WorldWindow's {@link GoToAnimator} property to perform the move. That object's
          * properties can be specified by the application to modify its behavior during calls to this function.
@@ -90268,6 +91052,72 @@ define('WorldWindow',[
                     }
                 }
             }
+        };
+
+        /**
+         * Transforms a Cartesian coordinate point to coordinates relative to this WorldWindow's canvas.
+         * <p/>
+         * This stores the converted point in the result argument, and returns a boolean value indicating whether or not the
+         * converted is successful. This returns false if the Cartesian point is clipped by either the WorldWindow's near
+         * clipping plane or far clipping plane.
+         *
+         * @param {Number} x      the Cartesian point's x component in meters
+         * @param {Number} y      the Cartesian point's y component in meters
+         * @param {Number} z      the Cartesian point's z component in meters
+         * @param {Vec2}   result a pre-allocated {@link Vec2} in which to return the screen point
+         *
+         * @return {boolean} true if the transformation is successful, otherwise false
+         *
+         * @throws {ArgumentError} If the result is null
+         */
+        WorldWindow.prototype.cartesianToScreenPoint = function (x, y, z, result) {
+            if (!result) {
+                throw new ArgumentError(Logger.logMessage(Logger.ERROR, "WorldWindow", "cartesianToScreenPoint",
+                    "missingResult"));
+            }
+
+            // Compute the WorldWindow's modelview-projection matrix.
+            this.computeViewingTransform(this.scratchProjection, this.scratchModelview);
+            this.scratchProjection.multiplyMatrix(this.scratchModelview);
+
+            // Transform the Cartesian point to OpenGL screen coordinates. Complete the transformation by converting to
+            // Android screen coordinates and discarding the screen Z component.
+            if (this.scratchProjection.project(x, y, z, this.viewport, this.scratchPoint)) {
+                result[0] = this.scratchPoint[0];
+                result[1] = this.viewport.height - this.scratchPoint[1];
+                return true;
+            }
+
+            return false;
+        };
+
+        /**
+         * Transforms a geographic position to coordinates relative to this WorldWindow's canvas.
+         * <p/>
+         * This stores the converted point in the result argument, and returns a boolean value indicating whether or not the
+         * converted is successful. This returns false if the Cartesian point is clipped by either of the WorldWindow's
+         * near clipping plane or far clipping plane.
+         *
+         * @param {Number} latitude  the position's latitude in degrees
+         * @param {Number} longitude the position's longitude in degrees
+         * @param {Number} altitude  the position's altitude in meters
+         * @param {Vec2}   result    a pre-allocated {@link Vec2} in which to return the screen point
+         *
+         * @return {boolean} true if the transformation is successful, otherwise false
+         *
+         * @throws {ArgumentError} If the result is null
+         */
+        WorldWindow.prototype.geographicToScreenPoint = function (latitude, longitude, altitude, result) {
+            if (!result) {
+                throw new ArgumentError(Logger.logMessage(Logger.ERROR, "WorldWindow", "geographicToScreenPoint",
+                    "missingResult"));
+            }
+
+            // Convert the position from geographic coordinates to Cartesian coordinates.
+            this.globe.computePointFromPosition(latitude, longitude, altitude, this.scratchPoint);
+
+            // Convert the position from Cartesian coordinates to screen coordinates.
+            return this.cartesianToScreenPoint(this.scratchPoint[0], this.scratchPoint[1], this.scratchPoint[2], result);
         };
 
         /**
@@ -90423,6 +91273,7 @@ define('WorldWind',[ // PLEASE KEEP ALL THIS IN ALPHABETICAL ORDER BY MODULE NAM
         './layer/BMNGOneImageLayer',
         './layer/BMNGRestLayer',
         './geom/BoundingBox',
+        './geom/Camera',
         './gesture/ClickRecognizer',
         './formats/collada/ColladaLoader',
         './util/Color',
@@ -90557,6 +91408,7 @@ define('WorldWind',[ // PLEASE KEEP ALL THIS IN ALPHABETICAL ORDER BY MODULE NAM
         './geom/Line',
         './geom/Location',
         './util/Logger',
+        './geom/LookAt',
         './navigate/LookAtNavigator',
         './geom/Matrix',
         './geom/MeasuredLocation',
@@ -90702,6 +91554,7 @@ define('WorldWind',[ // PLEASE KEEP ALL THIS IN ALPHABETICAL ORDER BY MODULE NAM
               BMNGOneImageLayer,
               BMNGRestLayer,
               BoundingBox,
+              Camera,
               ClickRecognizer,
               ColladaLoader,
               Color,
@@ -90836,6 +91689,7 @@ define('WorldWind',[ // PLEASE KEEP ALL THIS IN ALPHABETICAL ORDER BY MODULE NAM
               Line,
               Location,
               Logger,
+              LookAt,
               LookAtNavigator,
               Matrix,
               MeasuredLocation,
@@ -91218,6 +92072,7 @@ define('WorldWind',[ // PLEASE KEEP ALL THIS IN ALPHABETICAL ORDER BY MODULE NAM
         WorldWind['BMNGOneImageLayer'] = BMNGOneImageLayer;
         WorldWind['BMNGRestLayer'] = BMNGRestLayer;
         WorldWind['BoundingBox'] = BoundingBox;
+        WorldWind['Camera'] = Camera;
         WorldWind['ClickRecognizer'] = ClickRecognizer;
         WorldWind['ColladaLoader'] = ColladaLoader;
         WorldWind['Color'] = Color;
@@ -91352,6 +92207,7 @@ define('WorldWind',[ // PLEASE KEEP ALL THIS IN ALPHABETICAL ORDER BY MODULE NAM
         WorldWind['Line'] = Line;
         WorldWind['Location'] = Location;
         WorldWind['Logger'] = Logger;
+        WorldWind['LookAt'] = LookAt;
         WorldWind['LookAtNavigator'] = LookAtNavigator;
         WorldWind['Matrix'] = Matrix;
         WorldWind['MeasuredLocation'] = MeasuredLocation;
