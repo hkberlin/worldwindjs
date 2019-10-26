@@ -61,7 +61,7 @@ define([
         var RestTiledImageLayer = function (serverAddress, pathToData, displayName, configuration) {
             var cachePath = WWUtil.urlPath(serverAddress + "/" + pathToData);
 
-            TiledImageLayer.call(this,
+            TiledImageLayer.call(this, displayName,
                 (configuration && configuration.sector) || Sector.FULL_SPHERE,
                 (configuration && configuration.levelZeroTileDelta) || new Location(45, 45),
                 (configuration && configuration.numLevels) || 5,
@@ -70,8 +70,6 @@ define([
                 (configuration && configuration.tileWidth) || 256,
                 (configuration && configuration.tileHeight) || 256);
 
-            this.displayName = displayName;
-            this.pickEnabled = false;
             this.urlBuilder = new LevelRowColumnUrlBuilder(serverAddress, pathToData);
         };
 
